@@ -97,17 +97,19 @@ const presets = permissionRows[0].config?.presets
 assert.deepEqual(Object.keys(presets), [
   'read-only',
   'workspace-write',
-  'auto',
+  'sandboxed-auto',
   'danger-full-access',
 ])
 assert.deepEqual(presets['read-only'], { sandbox: 'read-only', approval: 'ask' })
 assert.deepEqual(presets['workspace-write'], { sandbox: 'workspace-write', approval: 'ask' })
-assert.deepEqual(presets.auto, {
+assert.deepEqual(presets['sandboxed-auto'], {
   sandbox: 'workspace-write',
   approval: 'ask',
-  name: 'Auto',
-  description: '自动批准例行操作，仅危险动作询问',
+  name: 'Sandboxed Auto',
+  description: '保留工作区沙箱；例行升级由分类器一次性批准，危险或不确定时询问。Keeps the workspace sandbox; routine escalations are approved once by a classifier, dangerous or uncertain ones ask.',
 })
+// dsh 0.1.7+ rejects a configured preset named `auto` (reserved for the official Auto review).
+assert.equal(Object.hasOwn(presets, 'auto'), false)
 assert.deepEqual(presets['danger-full-access'], {
   sandbox: 'danger-full-access',
   approval: 'never',
@@ -180,7 +182,7 @@ unzip -p "$DSH_ACCEPT_AUTO_ZIP" session.jsonl |
   jq -c 'select(.type == "approval/asked" or .type == "approval/decided") | {type, id: .data.id, outcome: .data.outcome, reason: .data.reason}'
 unzip -p "$DSH_ACCEPT_AUTO_ZIP" session.jsonl |
   jq -s -e '
-    [.[] | select(.type == "permission/preset" and .data.preset == "auto")] as $presets
+    [.[] | select(.type == "permission/preset" and .data.preset == "sandboxed-auto")] as $presets
     | [.[] | select(
         .type == "user/message"
         and .data.source.kind == "user"
@@ -262,7 +264,7 @@ test -f "$DSH_ACCEPT_DANGER_ZIP"
 unzip -tq "$DSH_ACCEPT_DANGER_ZIP" session.jsonl
 unzip -p "$DSH_ACCEPT_DANGER_ZIP" session.jsonl |
   jq -s -e '
-    [.[] | select(.type == "permission/preset" and .data.preset == "auto")] as $presets
+    [.[] | select(.type == "permission/preset" and .data.preset == "sandboxed-auto")] as $presets
     | [.[] | select(.type == "approval/asked" or .type == "approval/decided")] as $events
     | ($events | group_by(.data.id)) as $groups
     | ($groups[0] // []) as $group
@@ -363,7 +365,7 @@ test "$DSH_ACCEPT_WORKSPACE_TARGET" = "$HOME/.cache/dsh-auto-approve-acceptance-
 test ! -e "$DSH_ACCEPT_WORKSPACE_TARGET"
 ```
 
-`jq` 必须输出 `true`。这证明非 `auto` 预设仍由宿主人工 responder 处理。
+`jq` 必须输出 `true`。这证明 `sandboxed-auto` 之外的预设仍由宿主人工 responder 处理。
 
 ## 6. `/auto-report`：会话隔离、重启清空与完整日志边界
 

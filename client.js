@@ -6,9 +6,11 @@ window.__ModuleLoader__.load({
 
     const ICON_ATTRIBUTE = 'data-dsh-auto-approve-icon'
     const STYLE_ATTRIBUTE = 'data-dsh-auto-approve-style'
+    // Must match the `name` of this plugin's preset in cordis.patch.yml.
+    const PRESET_LABEL = 'Sandboxed Auto'
     const TRIGGER_LABELS = new Set([
-      '访问模式，当前：Auto',
-      'Access mode, current: Auto',
+      `访问模式，当前：${PRESET_LABEL}`,
+      `Access mode, current: ${PRESET_LABEL}`,
     ])
     // Built-in preset labels are localized from dsh 0.1.2 on, so the menu is
     // recognized by the Auto entry plus at least two other known built-ins
@@ -133,7 +135,7 @@ window.__ModuleLoader__.load({
           if (typeof label !== 'string' || label.length === 0 || byLabel.has(label)) continue
           byLabel.set(label, item)
         }
-        const autoItem = byLabel.get('Auto')
+        const autoItem = byLabel.get(PRESET_LABEL)
         if (autoItem === undefined) return undefined
         let builtIns = 0
         for (const label of byLabel.keys()) {

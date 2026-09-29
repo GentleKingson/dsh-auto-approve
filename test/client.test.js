@@ -195,7 +195,7 @@ function browserHarness(options = {}) {
   }
 }
 
-function permissionMenu(labels = ['Read Only', 'Workspace Write', 'Auto', 'Full access']) {
+function permissionMenu(labels = ['Read Only', 'Workspace Write', 'Sandboxed Auto', 'Full access']) {
   const menu = new FakeElement('div')
   menu.setAttribute('role', 'menu')
   const items = new Map()
@@ -212,7 +212,7 @@ function permissionControl(document, ariaLabel, labels) {
   const wrapper = new FakeElement('span')
   const trigger = new FakeElement('button')
   trigger.setAttribute('aria-label', ariaLabel)
-  trigger.appendChild(new FakeElement('span', 'Auto'))
+  trigger.appendChild(new FakeElement('span', 'Sandboxed Auto'))
   trigger.appendChild(new FakeElement('span'))
   const { menu, items } = permissionMenu(labels)
   wrapper.appendChild(trigger)
@@ -240,8 +240,8 @@ test('package exposes the handwritten browser bundle without an install build', 
 
 test('marks bilingual Auto triggers and only their validated permission menu rows', () => {
   const document = new FakeDocument()
-  const en = permissionControl(document, 'Access mode, current: Auto')
-  const zh = permissionControl(document, '访问模式，当前：Auto')
+  const en = permissionControl(document, 'Access mode, current: Sandboxed Auto')
+  const zh = permissionControl(document, '访问模式，当前：Sandboxed Auto')
   const inactive = permissionControl(document, 'Access mode, current: Workspace Write')
   const unrelated = permissionMenu()
   document.body.appendChild(unrelated.menu)
@@ -258,11 +258,11 @@ test('marks bilingual Auto triggers and only their validated permission menu row
 
   assert.equal(en.trigger.getAttribute(ICON_ATTRIBUTE), 'trigger')
   assert.equal(zh.trigger.getAttribute(ICON_ATTRIBUTE), 'trigger')
-  assert.equal(en.items.get('Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
-  assert.equal(zh.items.get('Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(en.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(zh.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
   assert.equal(inactive.trigger.getAttribute(ICON_ATTRIBUTE), null)
-  assert.equal(inactive.items.get('Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
-  assert.equal(unrelated.items.get('Auto').getAttribute(ICON_ATTRIBUTE), null)
+  assert.equal(inactive.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(unrelated.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
   assert.equal(en.trigger.children.length, beforeChildren, 'the enhancer does not insert icon nodes')
 
   const styles = descendants(document.head).filter(node => node.tagName === 'STYLE')
@@ -314,9 +314,9 @@ test('discovers an opened permission menu while Workspace Write is current', () 
   app.flushFrames()
 
   assert.equal(trigger.getAttribute(ICON_ATTRIBUTE), null)
-  assert.equal(items.get('Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
   app.dispose()
-  assert.equal(items.get('Auto').getAttribute(ICON_ATTRIBUTE), null)
+  assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
 })
 
 test('rejects lookalike menus and removes stale marks and owned CSS on dispose', () => {
@@ -326,22 +326,22 @@ test('rejects lookalike menus and removes stale marks and owned CSS on dispose',
   // built-ins is a real permission menu even when a preset is absent.
   const invalid = permissionControl(
     document,
-    'Access mode, current: Auto',
-    ['Rename', 'Duplicate', 'Auto'],
+    'Access mode, current: Sandboxed Auto',
+    ['Rename', 'Duplicate', 'Sandboxed Auto'],
   )
   const app = browserHarness({ document })
   app.apply()
   app.flushFrames()
 
   assert.equal(invalid.trigger.getAttribute(ICON_ATTRIBUTE), 'trigger')
-  assert.equal(invalid.items.get('Auto').getAttribute(ICON_ATTRIBUTE), null)
+  assert.equal(invalid.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
 
   invalid.trigger.setAttribute('aria-label', 'Access mode, current: Workspace Write')
   app.observers[0].notify([{ type: 'attributes', attributeName: 'aria-label', target: invalid.trigger }])
   app.flushFrames()
   assert.equal(invalid.trigger.getAttribute(ICON_ATTRIBUTE), null)
 
-  invalid.trigger.setAttribute('aria-label', 'Access mode, current: Auto')
+  invalid.trigger.setAttribute('aria-label', 'Access mode, current: Sandboxed Auto')
   app.observers[0].notify([{ type: 'attributes', attributeName: 'aria-label', target: invalid.trigger }])
   assert.equal(app.frames.size, 1)
   app.dispose()
@@ -361,7 +361,7 @@ test('missing browser APIs and selector failures are cosmetic and never fail app
   const brokenQueries = browserHarness({ document })
   assert.doesNotThrow(() => { brokenQueries.apply() })
   const target = new FakeElement('button')
-  target.setAttribute('aria-label', 'Access mode, current: Auto')
+  target.setAttribute('aria-label', 'Access mode, current: Sandboxed Auto')
   assert.doesNotThrow(() => {
     brokenQueries.observers[0].notify([{ type: 'attributes', attributeName: 'aria-label', target }])
   })
@@ -380,14 +380,14 @@ test('recognizes the permission menu when built-in labels are localized', () => 
   // host-configured preset such as Auto keeps its own name.
   const localized = permissionControl(
     document,
-    '访问模式，当前：Auto',
-    ['仅可查看', '工作区内修改', 'Auto', '完全权限'],
+    '访问模式，当前：Sandboxed Auto',
+    ['仅可查看', '工作区内修改', 'Sandboxed Auto', '完全权限'],
   )
   const app = browserHarness({ document })
   app.apply()
   app.flushFrames()
 
   assert.equal(localized.trigger.getAttribute(ICON_ATTRIBUTE), 'trigger')
-  assert.equal(localized.items.get('Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(localized.items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
   app.dispose()
 })

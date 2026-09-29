@@ -36,7 +36,9 @@ const REPORT_CATEGORIES = Object.freeze([
 ])
 
 export const Config = Schema.object({
-  presetName: Schema.string().min(1).default('auto'),
+  // `auto` is reserved upstream from dsh 0.1.7 for the shipped Auto review
+  // preset, so this plugin's own preset carries a distinct id.
+  presetName: Schema.string().min(1).default('sandboxed-auto'),
   provider: Schema.union([
     Schema.string().min(1),
     Schema.const(null),

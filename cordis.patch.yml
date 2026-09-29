@@ -2,7 +2,7 @@
     - id: auto-approve
       name: dsh-auto-approve
       config:
-        presetName: auto
+        presetName: sandboxed-auto
         provider: null
         model: null
         classifierPrompt: |-
@@ -34,11 +34,11 @@
       workspace-write:
         sandbox: workspace-write
         approval: ask
-      auto:
+      sandboxed-auto:
         sandbox: workspace-write
         approval: ask
-        name: Auto
-        description: 自动批准例行操作，仅危险动作询问
+        name: Sandboxed Auto
+        description: 保留工作区沙箱；例行升级由分类器一次性批准，危险或不确定时询问。Keeps the workspace sandbox; routine escalations are approved once by a classifier, dangerous or uncertain ones ask.
       danger-full-access:
         sandbox: danger-full-access
         approval: never

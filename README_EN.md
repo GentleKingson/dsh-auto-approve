@@ -17,13 +17,15 @@
 English | [中文](README.md)
 
 
-`dsh-auto-approve` adds an `Auto` permission preset to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). In that preset, routine sandbox escalations may be approved once by a classifier model; deterministic danger matches, uncertain model decisions, timeouts, malformed responses, and internal failures continue to the normal human approval dialog.
+`dsh-auto-approve` adds a **Sandboxed Auto** permission preset (preset id `sandboxed-auto`) to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). In that preset **the workspace sandbox stays in place**, and routine sandbox escalations may be approved once by a classifier model; deterministic danger matches, uncertain model decisions, timeouts, malformed responses, and internal failures continue to the normal human approval dialog.
 
-The bundle restates the permission preset table as four entries, in this order: `read-only`, `workspace-write`, `auto`, and `danger-full-access` — the `auto` preset is inserted between the stock presets, all of which are preserved. Outside the `auto` preset, the plugin delegates every approval request unchanged.
+The bundle restates the permission preset table as four entries, in this order: `read-only`, `workspace-write`, `sandboxed-auto`, and `danger-full-access` — this plugin's preset is inserted between the stock presets, all of which are preserved. Outside the `sandboxed-auto` preset, the plugin delegates every approval request unchanged.
+
+> **Upgrading from 0.6.x?** From 0.7.0 the preset id changes from `auto` to `sandboxed-auto`: from dsh 0.1.7 on, `auto` is reserved for the shipped experimental Auto review, and keeping it makes the permission presets fail to load. Read [Upgrading from 0.6.x](#upgrading-from-06x) first.
 
 ## Positioning
 
-`auto` is a lower-friction safety layer on top of `workspace-write`: it keeps the same sandbox boundary and sends routine escalations to the classifier, while danger-list matches, classifier uncertainty, and classification failures return to human approval.
+Sandboxed Auto is a lower-friction safety layer on top of `workspace-write`: it keeps the same sandbox boundary and sends routine escalations to the classifier, while danger-list matches, classifier uncertainty, and classification failures return to human approval.
 
 Unlike comparable schemes that switch the sandbox off and run their own approval channel, this plugin **relaxes no sandbox boundary**: the classifier only decides whether to grant **one** escalation, file tools and other non-shell operations stay sandboxed, and approvals still land in dsh's native session audit events.
 
@@ -33,12 +35,31 @@ Think of it as DeepSeek Harness's counterpart to [Claude Code's **auto mode**](h
 | --- | --- | --- | --- |
 | `read-only` | Read-only workspace; project files cannot be changed | Writing, network access, or another out-of-bounds action needs escalation | Code review, exploration, and sensitive repositories |
 | `workspace-write` | Workspace reads and writes are allowed; outside paths and restricted capabilities remain isolated | Network access, writes outside the workspace, or another sandbox escalation | Everyday development where a human reviews every escalation |
-| **`auto`** | **Same as `workspace-write`** | **Routine escalations are auto-approved; destructive-list matches, classifier uncertainty, or failures go to a human** | **Long-running tasks and dependency installs; fewer interruptions with a complete audit trail** |
+| **`sandboxed-auto`** | **Same as `workspace-write`** | **Routine escalations are auto-approved; destructive-list matches, classifier uncertainty, or failures go to a human** | **Long-running tasks and dependency installs; fewer interruptions with a complete audit trail** |
 | `danger-full-access` | No workspace sandbox boundary; commands run with host permissions | No prompt (`approval: never`) | Isolated, disposable, fully trusted environments only |
+
+## Compared with the official Auto review
+
+From dsh 0.1.7 the install ships an **experimental** official preset, **Auto review** (package `@deepseek-ai/dsh-experimental-auto-review`, preset id `auto`, off by default, enabled from the sidebar **Plugins** page). The names are close, but it takes the opposite route:
+
+| | Official Auto review | Sandboxed Auto (this plugin) |
+| --- | --- | --- |
+| Sandbox | **None** (Full access) | **Keeps** the workspace-write sandbox |
+| What is reviewed | Every tool call | Sandbox escalations only (about 2% of calls in practice) |
+| Review model | The current agent's model; not changeable | Configurable, including a cheaper model |
+| Deterministic floor | None | A danger list runs before the classifier and cannot be overridden |
+| Configuration | None | Prompt, deadline, danger rules, session memory |
+| When review fails | The call fails and does not run | Falls back to human approval |
+| Where it works | Needs the Web layer enabled; not in Headless; cannot be the default for new sessions | Web / TUI / Desktop / Headless; can be the default preset |
+| Audit | Risk tier, reasoning, and raw response are not persisted | Native `approval/asked` + `approval/decided` pairs and the `/auto-report` session ledger |
+
+The official preset does things this plugin cannot: it reviews operations **inside** the workspace too, whereas this plugin never sees in-sandbox actions (such as deleting files in the project) because the sandbox already allows them; its review input is partitioned and deliberately excludes tool results against injection, with low/medium/high risk tiers that set authorization requirements; and it is maintained upstream, so it tracks dsh's interfaces.
+
+**Which to use**: choose the official Auto review for maximum autonomy if you accept running without a sandbox and a per-call token cost; choose Sandboxed Auto to keep the sandbox as a hard boundary and let the model handle only boundary-crossing requests. The preset ids differ, so both can be installed and picked separately in the selector — this plugin acts only under `sandboxed-auto`, and when the official `auto` is selected it passes every approval request through unchanged, never answering an ask the official reviewer meant for you.
 
 ## How it works
 
-For each `approval/request` in the `auto` preset, the plugin:
+For each `approval/request` in the `sandboxed-auto` preset, the plugin:
 
 1. Recovers the raw `tool/call` arguments from the in-memory session log and reads the newest genuine user message: only text from a `user/message` whose `source.kind === "user"` is accepted, and plugin messages are ignored. Messages up to 2,000 characters are included in full; a longer message is not truncated and guessed from, but sent directly to human review.
 2. Checks the justification and tool arguments against a deterministic danger list; a confusion circuit breaker sends destructive commands that use command or process substitution directly to a human.
@@ -56,9 +77,10 @@ The host-side plugin depends only on dsh's `approval/request` waterfall and the 
 
 | Frontend | Support | Notes |
 | --- | --- | --- |
-| **Web** (`dsh web`) | ✅ Full | Approval dialogs, the `Auto` icon shim, and `/permission` switching all work |
-| **TUI** ([ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)) | ✅ Supported | Routine escalations are auto-approved by the classifier; dangerous or uncertain requests enter the TUI's Claude Code-style approval panel (`allowed-once`/`rejected` only). The TUI does not wire `/permission` preset switching — set `permission.defaultPreset: auto` in that profile's settings to enter the Auto preset. The icon shim is Web-DOM only and does not apply in the TUI (cosmetic) |
-| **Desktop** ([xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop) et al.) | ✅ Supported | Desktop shells are native windows over the official Web UI ([bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop) supports macOS/Windows/Linux and can reuse a running instance on 127.0.0.1:3080), identical to the Web experience |
+| **Web** (`dsh web`) | ✅ Full | Approval dialogs, the icon shim, and `/permission` switching all work |
+| **Official Desktop** (DeepSeek Harness Desktop, [`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)) | ✅ Supported | The official Electron shell embeds the full Web app, so the host side is identical to Web. Install the plugin from the in-app **Plugins** page; see [Official Desktop](#official-desktop) |
+| **TUI** ([ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)) | ✅ Supported | Routine escalations are auto-approved by the classifier; dangerous or uncertain requests enter the TUI's Claude Code-style approval panel (`allowed-once`/`rejected` only). The TUI does not wire `/permission` preset switching — set `permission.defaultPreset: sandboxed-auto` in that profile's settings to enter this plugin's preset. The icon shim is Web-DOM only and does not apply in the TUI (cosmetic) |
+| **Community desktop shells** ([xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop), [bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop), et al.) | ✅ Supported | Native windows over the official Web UI that can reuse a running instance on `127.0.0.1:3080`, identical to Web; install as for Web |
 
 ## Install
 
@@ -86,7 +108,7 @@ From a local checkout:
 dsh plugin --profile web add ./dsh-auto-approve
 ```
 
-Restart `dsh web`, open the Permissions selector, and choose `Auto`.
+Restart `dsh web`, open the Permissions selector, and choose `Sandboxed Auto`.
 
 To remove the bundle:
 
@@ -94,11 +116,37 @@ To remove the bundle:
 dsh plugin --profile web remove dsh-auto-approve
 ```
 
+### Official Desktop
+
+The official Desktop owns its own profile (`$DSH_HOME/profiles/desktop`), and **the CLI cannot install plugins into it** — the `dsh plugin --profile …` commands above do not apply. Install from inside the app:
+
+1. Open the sidebar **Plugins** page and choose to install an external bundle;
+2. Enter the package name `dsh-auto-approve` (Desktop uses its bundled pnpm and installs by name from npm; no Node or pnpm is needed on the machine);
+3. When the install finishes, **restart the app** as prompted (Desktop's Web form does not enable hot reload by default, so a new plugin takes effect after a restart);
+4. Choose `Sandboxed Auto` in the composer's permission selector.
+
+Compatibility: Desktop runs the host and plugins in Electron's embedded Node (Node 24 in Electron 44), which satisfies this package's `engines`. The package has no runtime dependencies, and `@deepseek-ai/schemastery` is supplied by Desktop's runtime resolution layer, so no second copy appears. Desktop's Web Host listens on port `19387` by default (Web uses `3080`); the plugin does not depend on the port.
+
+Uninstall from the same **Plugins** page. If the plugin keeps Desktop from starting, Desktop's native recovery dialog offers to disable third-party plugins.
+
+## Upgrading from 0.6.x
+
+0.7.0 renames the preset id from `auto` to `sandboxed-auto`, a **breaking change**. From dsh 0.1.7 `auto` is reserved for the official Auto review: a preset named `auto` in the configured table makes the permission presets fail to load with `"auto" is reserved`.
+
+**Before** upgrading dsh to 0.1.7 or later, in order:
+
+1. Upgrade the plugin: `dsh plugin --profile web add dsh-auto-approve@0.7.0` (pin the version; `@latest` can resolve to an older release through pnpm's cached metadata);
+2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`);
+3. If a profile `cordis.patch.yml` overrides this plugin's config with `presetName: auto`, change that to `sandboxed-auto` as well;
+4. Then upgrade dsh and restart.
+
+**About old sessions**: a session whose recorded preset is `auto` fails to open on dsh 0.1.7+ while the official Auto review is off, with `cannot restore preset "auto" without its active integration`. Its data is not lost; it just cannot be opened for now. Enabling the official Auto review lets it open again, but it restores under the **official Auto (no sandbox)** semantics, so switch it to the preset you need right after opening.
+
 ## Configuration
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `presetName` | `auto` | Permission preset in which the responder is active. |
+| `presetName` | `sandboxed-auto` | Permission preset in which the responder is active. Cannot be `auto` (reserved for the official Auto review from dsh 0.1.7). |
 | `provider` | `null` | `null` = use the default model provider configured under **Settings → Models**; any API is supported. |
 | `model` | `null` | `null` = use the default model id configured under **Settings → Models**; any API is supported. |
 | `classifierPrompt` | Built-in default prompt | Complete system prompt for classification; since 0.5.0 it takes an approve-by-default, ask-on-enumerated-concern posture. The earlier strict version is in [the strict prompt](#the-strict-prompt-optional). A configured value replaces the default rather than appending to it. |
@@ -116,7 +164,7 @@ dsh plugin --profile web remove dsh-auto-approve
 
 ### Choosing a classifier model
 
-Classification is one binary `approve` / `ask` judgement and needs no reasoning capability. If your default model is a large reasoning model — especially at a high reasoning effort — following it makes every approval pay that model's latency and cost, and makes `timeoutMs` far easier to hit. A timeout safely falls back to the human dialog, which looks like "the Auto preset is not doing anything".
+Classification is one binary `approve` / `ask` judgement and needs no reasoning capability. If your default model is a large reasoning model — especially at a high reasoning effort — following it makes every approval pay that model's latency and cost, and makes `timeoutMs` far easier to hit. A timeout safely falls back to the human dialog, which looks like "the Sandboxed Auto preset is not doing anything".
 
 How to tell: run `/auto-report` in a session. A high share of `verdict=timeout` entries under `Classifier-to-human` is this situation.
 
@@ -257,7 +305,7 @@ Use `workspace-write` when every escalation must receive human review. Add deplo
 
 ## Known limitations
 
-The Permissions selector in DeepSeek Harness does not expose an API for custom preset icons. The plugin therefore uses a best-effort browser compatibility layer to recognize the `Auto` trigger and menu item and add the icon. The layer depends on the host's DOM structure and accessible copy: the menu must show `Auto` alongside at least two built-in preset labels (English `Read Only` / `Workspace Write` / `Full access`, or the Chinese labels shipped from 0.1.2 on). If dsh changes that copy or structure again the icon may disappear — a cosmetic failure only, with no effect on `Auto` approvals, danger rules, or the human fallback.
+The Permissions selector in DeepSeek Harness does not expose an API for custom preset icons. The plugin therefore uses a best-effort browser compatibility layer to recognize the `Sandboxed Auto` trigger and menu item and add the icon. The layer depends on the host's DOM structure and accessible copy: the menu must show `Sandboxed Auto` alongside at least two built-in preset labels (English `Read Only` / `Workspace Write` / `Full access`, or the Chinese labels shipped from 0.1.2 on). If dsh changes that copy or structure again the icon may disappear — a cosmetic failure only, with no effect on automatic approvals, danger rules, or the human fallback.
 
 ### Host version compatibility
 
@@ -268,7 +316,9 @@ The plugin supports the session APIs from both before and after dsh 0.1.2, selec
 | Reading session events | `session.events` | `session.snapshotEvents()` |
 | Resolving the current preset | `permissionPresets.current(events)` | `permissionPresets.current(session)` |
 
-To insert `auto`, this bundle restates the complete permission preset table rather than appending one entry. If a future `dsh-base` release adds, renames, or changes presets, an installed release will not inherit those changes automatically. Recheck and update the patch whenever dsh is upgraded; see the [acceptance guide](./docs/ACCEPTANCE.md).
+From dsh **0.1.7** there is one more incompatibility that feature detection cannot absorb: `auto` becomes the reserved preset name of the official Auto review. From 0.7.0 this plugin uses `sandboxed-auto`, so it runs on every host from before 0.1.2 through 0.2.x; 0.6.x and earlier cannot be used with dsh 0.1.7+ — see [Upgrading from 0.6.x](#upgrading-from-06x).
+
+To insert `sandboxed-auto`, this bundle restates the complete permission preset table rather than appending one entry. If a future `dsh-base` release adds, renames, or changes presets, an installed release will not inherit those changes automatically. Recheck and update the patch whenever dsh is upgraded; see the [acceptance guide](./docs/ACCEPTANCE.md).
 
 ## FAQ
 
@@ -279,7 +329,7 @@ That page only renders namespaces on the host api-proxy whitelist (currently `ba
 The inventory tab lists every Loader-tree plugin row; search for `dsh-auto-approve` or the entry id `auto-approve`. The snapshot is read once when Settings opens, so reopen Settings after installing. The page is a deliberately read-only view with no enable/disable controls.
 
 **How do I pause auto-approval temporarily?**
-Switch the session's permission preset back to `Workspace Write`. The plugin is completely inert outside the `auto` preset — no restart needed; this is the built-in switch.
+Switch the session's permission preset back to `Workspace Write`. The plugin is completely inert outside the `sandboxed-auto` preset — no restart needed; this is the built-in switch.
 
 **How do I disable it entirely?**
 Append the following to your profile's user patch layer at `$DSH_HOME/profiles/web/cordis.patch.yml` (default `~/.dsh/profiles/web/`) and restart `dsh web`, or uninstall with `dsh plugin --profile web remove dsh-auto-approve`:

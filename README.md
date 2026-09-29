@@ -16,13 +16,15 @@
 
 中文 | [English](README_EN.md)
 
-`dsh-auto-approve` 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 增加 `Auto` 权限档。在该档位下，分类模型可以对例行的沙箱升级做一次性批准；命中确定性危险规则、模型拿不准、超时、响应格式错误或插件内部异常时，审批仍会交给正常的人工弹窗。
+`dsh-auto-approve` 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 增加 **Sandboxed Auto**（档位 id `sandboxed-auto`）权限档。在该档位下，**工作区沙箱保持不变**，分类模型可以对例行的沙箱升级做一次性批准；命中确定性危险规则、模型拿不准、超时、响应格式错误或插件内部异常时，审批仍会交给正常的人工弹窗。
 
-该 bundle 会把权限预设表重述为四个档位，顺序为 `read-only`、`workspace-write`、`auto`、`danger-full-access`——即在 dsh 原生三档中间插入 `auto` 档，原有档位全部保留。不在 `auto` 档时，插件会原样放行所有审批请求给后续应答者。
+该 bundle 会把权限预设表重述为四个档位，顺序为 `read-only`、`workspace-write`、`sandboxed-auto`、`danger-full-access`——即在 dsh 原生三档中间插入本插件的档位，原有档位全部保留。不在 `sandboxed-auto` 档时，插件会原样放行所有审批请求给后续应答者。
+
+> **从 0.6.x 升级？** 0.7.0 起档位 id 由 `auto` 改为 `sandboxed-auto`：dsh 0.1.7 起 `auto` 被官方实验性的 Auto review 占用为保留名，继续使用会导致权限预设加载失败。请先阅读[从 0.6.x 升级](#从-06x-升级)。
 
 ## 定位
 
-`auto` 是 `workspace-write` 之上的低打扰安全层：保留同一沙箱边界，把例行升级交给分类器；命中危险清单、分类器拿不准或分类失败时，才回到人工审批。
+Sandboxed Auto 是 `workspace-write` 之上的低打扰安全层：保留同一沙箱边界，把例行升级交给分类器；命中危险清单、分类器拿不准或分类失败时，才回到人工审批。
 
 与关闭沙箱、自建审批通道的同类方案不同，本插件**不放宽任何沙箱边界**：分类器只决定是否放行**一次**升级，文件工具与其他非 shell 操作仍然受沙箱约束，审批记录也仍然落在 dsh 原生的会话审计事件里。
 
@@ -32,12 +34,31 @@
 | --- | --- | --- | --- |
 | `read-only` | 只读工作区，不能修改项目文件 | 需要写入、联网或执行其他越界操作时 | 代码审阅、探索和敏感仓库 |
 | `workspace-write` | 可读写工作区；工作区外和受限能力仍被隔离 | 需要联网、写工作区外或进行其他沙箱升级时 | 常规开发；每次升级都由人确认 |
-| **`auto`** | **与 `workspace-write` 相同** | **例行升级自动批；命中删库级危险清单、分类器拿不准或失败时才问人** | **长任务和依赖安装；减少打断且全程保留审计台账** |
+| **`sandboxed-auto`** | **与 `workspace-write` 相同** | **例行升级自动批；命中删库级危险清单、分类器拿不准或失败时才问人** | **长任务和依赖安装；减少打断且全程保留审计台账** |
 | `danger-full-access` | 不受工作区沙箱限制，按宿主权限运行 | 不弹窗（`approval: never`） | 仅限隔离、可丢弃且充分信任的环境 |
+
+## 与官方 Auto review 的区别
+
+dsh 0.1.7 起随安装附带一个**实验性**的官方权限档 **Auto review**（包 `@deepseek-ai/dsh-experimental-auto-review`，档位 id `auto`，默认关闭，在侧栏「插件」页开启）。它与本插件名字相近，但走的是相反的路线：
+
+| | 官方 Auto review | Sandboxed Auto（本插件） |
+| --- | --- | --- |
+| 沙箱 | **无沙箱**（Full access） | **保留** workspace-write 沙箱 |
+| 审查范围 | 每一次工具调用 | 仅沙箱升级（实测约占全部调用的 2%） |
+| 审查模型 | 当前 agent 的模型，不可更换 | 可配置，可换更便宜的模型 |
+| 确定性兜底 | 无 | 危险清单先于分类器执行且不可推翻 |
+| 可配置项 | 无 | 提示词、超时、危险规则、会话记忆 |
+| 审查失败时 | 调用失败，不执行 | 转人工审批 |
+| 可用形态 | 需开启 Web 层；Headless 不可用；不能设为新会话默认档 | Web / TUI / Desktop / Headless，可设为默认档 |
+| 审计 | 风险分级、推理与原始响应不持久化 | 原生 `approval/asked` + `approval/decided` 审计对，`/auto-report` 会话台账 |
+
+官方方案也有本插件做不到的地方：它连**工作区内**的操作也逐条审查，而本插件对沙箱内的操作（例如在项目里删除文件）完全不介入，因为沙箱已经放行；它的审查输入有分区设计并刻意排除工具结果以防注入，还按低/中/高三级风险区分授权要求；它由上游维护，会跟随 dsh 的接口演进。
+
+**怎么选**：想要最大自主、能接受无沙箱和逐调用的 token 成本，用官方 Auto review；想保留沙箱这道硬边界、只让模型处理越界请求，用 Sandboxed Auto。两者档位 id 不同，可以同时安装并在选择器里分别选择——本插件只在 `sandboxed-auto` 档下工作，选中官方 `auto` 时会原样放行所有审批请求，不会替官方审查员回答本应交给你的询问。
 
 ## 工作原理
 
-收到 `auto` 档的 `approval/request` 后，插件会：
+收到 `sandboxed-auto` 档的 `approval/request` 后，插件会：
 
 1. 从内存中的会话日志找回对应 `tool/call` 的原始参数，并读取最新一条真人用户消息：只接受 `user/message` 中 `source.kind === "user"` 的文本，忽略插件消息。消息不超过 2000 个字符时完整加入证据；超过上限则不截断猜测，直接转人工。
 2. 先用确定性危险清单检查 justification 和工具参数；混淆熔断会把带命令替换或进程替换的破坏性命令直接交给人工。
@@ -55,9 +76,10 @@
 
 | 前端 | 支持 | 说明 |
 | --- | --- | --- |
-| **Web**（`dsh web`） | ✅ 完整支持 | 审批对话框、`Auto` 图标兼容层、`/permission` 切换全部可用 |
-| **TUI**（[ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)） | ✅ 支持 | 例行升级由分类器自动批；危险/拿不准时进入 TUI 的 Claude Code 风格审批面板（仅 `allowed-once` / `rejected`）。注意：TUI 未接入 `/permission` 预设切换，需在该 profile 的 settings 中设置 `permission.defaultPreset: auto` 才能进入 Auto 档；图标兼容层为 Web DOM 专属，TUI 中不生效（纯视觉） |
-| **Desktop**（[xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop) 等） | ✅ 支持 | 桌面端是官方 Web UI 的原生窗口（[bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop) 支持 macOS/Windows/Linux，可复用本机 127.0.0.1:3080 实例），与 Web 体验完全一致 |
+| **Web**（`dsh web`） | ✅ 完整支持 | 审批对话框、图标兼容层、`/permission` 切换全部可用 |
+| **官方桌面端**（DeepSeek Harness Desktop，[`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)） | ✅ 支持 | 官方 Electron 壳内嵌完整 Web 应用，宿主侧与 Web 完全相同。插件需在应用内「插件」页安装，见[官方桌面端](#官方桌面端) |
+| **TUI**（[ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)） | ✅ 支持 | 例行升级由分类器自动批；危险/拿不准时进入 TUI 的 Claude Code 风格审批面板（仅 `allowed-once` / `rejected`）。注意：TUI 未接入 `/permission` 预设切换，需在该 profile 的 settings 中设置 `permission.defaultPreset: sandboxed-auto` 才能进入本插件的档位；图标兼容层为 Web DOM 专属，TUI 中不生效（纯视觉） |
+| **社区桌面壳**（[xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop)、[bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop) 等） | ✅ 支持 | 包裹官方 Web UI 的原生窗口，可复用本机 `127.0.0.1:3080` 实例，与 Web 体验一致；按 Web 的方式安装 |
 
 ## 安装
 
@@ -85,7 +107,7 @@ dsh plugin --profile web add github:Jiao-XXX/dsh-auto-approve
 dsh plugin --profile web add ./dsh-auto-approve
 ```
 
-重启 `dsh web`，然后在 Permissions 下拉框中选择 `Auto`。
+重启 `dsh web`，然后在 Permissions 下拉框中选择 `Sandboxed Auto`。
 
 卸载：
 
@@ -93,11 +115,37 @@ dsh plugin --profile web add ./dsh-auto-approve
 dsh plugin --profile web remove dsh-auto-approve
 ```
 
+### 官方桌面端
+
+官方桌面端独占自己的 profile（`$DSH_HOME/profiles/desktop`），**CLI 不能向它安装插件**，上面的 `dsh plugin --profile …` 命令对桌面端无效。请在应用内安装：
+
+1. 打开侧栏的「**插件**」页，选择安装外部组合包；
+2. 输入包名 `dsh-auto-approve`（桌面端使用内置 pnpm，按包名从 npm 安装，无需本机装有 Node 或 pnpm）；
+3. 安装完成后按提示**重启应用**（桌面端 Web 形态默认未开启热重载，新插件在重启后生效）；
+4. 在输入框的权限选择器中选择 `Sandboxed Auto`。
+
+兼容性说明：桌面端在 Electron 内置的 Node（Electron 44 为 Node 24）中运行宿主与插件，满足本包的 `engines` 要求；本包零运行时依赖，`@deepseek-ai/schemastery` 由桌面端运行时解析层提供，不会出现第二份副本。桌面端 Web Host 默认监听 `19387` 端口（Web 为 `3080`），本插件不依赖端口。
+
+卸载同样在「插件」页操作。若插件导致桌面端启动失败，桌面端的原生恢复对话框提供「禁用第三方插件」选项。
+
+## 从 0.6.x 升级
+
+0.7.0 把档位 id 从 `auto` 改为 `sandboxed-auto`，这是一次**破坏性变更**。原因是 dsh 0.1.7 起把 `auto` 保留给官方 Auto review：配置表里出现名为 `auto` 的档位会让权限预设在加载时报错 `"auto" is reserved`。
+
+升级 dsh 到 0.1.7 或更高版本**之前**，按顺序完成：
+
+1. 升级插件：`dsh plugin --profile web add dsh-auto-approve@0.7.0`（请写明版本号，`@latest` 可能被 pnpm 缓存的元数据解析到旧版）；
+2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；
+3. 若在 profile 的 `cordis.patch.yml` 里覆盖过本插件配置并写了 `presetName: auto`，同样改为 `sandboxed-auto`；
+4. 再升级 dsh 并重启。
+
+**关于旧会话**：档位记录为 `auto` 的旧会话，在 dsh 0.1.7+ 上且未开启官方 Auto review 时，打开会报错 `cannot restore preset "auto" without its active integration`。会话数据不会丢失，只是暂时无法打开。开启官方 Auto review 能让它们重新打开，但会以**官方 Auto（无沙箱）**的语义恢复，打开后请立即切回你需要的档位。
+
 ## 配置
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `presetName` | `auto` | 插件应答者生效的权限档名。 |
+| `presetName` | `sandboxed-auto` | 插件应答者生效的权限档名。不能设为 `auto`（dsh 0.1.7 起为官方 Auto review 保留）。 |
 | `provider` | `null` | `null` = 使用 **Settings → Models** 中配置的默认模型 provider，任何 API 均适用。 |
 | `model` | `null` | `null` = 使用 **Settings → Models** 中配置的默认模型 id，任何 API 均适用。 |
 | `classifierPrompt` | 内置默认提示 | 分类调用的完整 system prompt；0.5.0 起为"默认放行、命中列举顾虑才询问"的姿态，旧的严格版见[严格档提示词](#严格档提示词可选)。配置值会整体替换默认提示，而不是追加。 |
@@ -109,13 +157,13 @@ dsh plugin --profile web remove dsh-auto-approve
 
 `provider` 与 `model` 会在每次分类时独立解析，因此有三种常见用法：
 
-1. **默认零配置**：两者保持 `null`，自动跟随你的默认模型；无论接入 DeepSeek、自定义 OpenAI 兼容端点还是其他 API，都可以直接使用 Auto 档。
+1. **默认零配置**：两者保持 `null`，自动跟随你的默认模型；无论接入 DeepSeek、自定义 OpenAI 兼容端点还是其他 API，都可以直接使用 Sandboxed Auto 档。
 2. **同一 API 下换用更便宜的分类模型**：只把 `model` 设为你自己 API 中的模型名，`provider` 保持 `null`。
 3. **指定完全不同的 provider**：同时显式配置 `provider` 与 `model`。
 
 ### 分类模型选型建议
 
-分类是一次 `approve` / `ask` 的二元判断，不需要推理能力。如果你的默认模型是大型推理模型（尤其开启了较高的 reasoning effort），跟随默认模型会让每次审批都付出该模型的延迟与成本，也更容易撞上 `timeoutMs`——超时会安全回退到人工弹窗，表现出来就是"Auto 档好像没生效"。
+分类是一次 `approve` / `ask` 的二元判断，不需要推理能力。如果你的默认模型是大型推理模型（尤其开启了较高的 reasoning effort），跟随默认模型会让每次审批都付出该模型的延迟与成本，也更容易撞上 `timeoutMs`——超时会安全回退到人工弹窗，表现出来就是"Sandboxed Auto 档好像没生效"。
 
 判断方法：在会话里运行 `/auto-report`，如果 `分类器转人工` 分组里 `verdict=timeout` 占比偏高，就是这种情况。
 
@@ -256,7 +304,7 @@ dsh 的沙箱升级没有路径粒度：模型能申请的目标只有 `danger-f
 
 ## 已知限制
 
-DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API。本插件因此通过浏览器侧的 best-effort 兼容层识别 `Auto` 触发器和菜单项，再补上图标。该兼容层依赖宿主的 DOM 结构与无障碍文案：菜单需同时出现 `Auto` 与至少两个内置档位标签（英文 `Read Only` / `Workspace Write` / `Full access`，或 0.1.2 起的中文「仅可查看」「工作区内修改」「完全权限」）。dsh 再次改动这些文案或结构后，图标可能消失——这种失效只影响图标显示，不影响 `Auto` 审批、危险规则或人工兜底。
+DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API。本插件因此通过浏览器侧的 best-effort 兼容层识别 `Sandboxed Auto` 触发器和菜单项，再补上图标。该兼容层依赖宿主的 DOM 结构与无障碍文案：菜单需同时出现 `Sandboxed Auto` 与至少两个内置档位标签（英文 `Read Only` / `Workspace Write` / `Full access`，或 0.1.2 起的中文「仅可查看」「工作区内修改」「完全权限」）。dsh 再次改动这些文案或结构后，图标可能消失——这种失效只影响图标显示，不影响自动审批、危险规则或人工兜底。
 
 ### 宿主版本兼容
 
@@ -267,7 +315,9 @@ DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API�
 | 读会话事件 | `session.events` | `session.snapshotEvents()` |
 | 解析当前权限档 | `permissionPresets.current(events)` | `permissionPresets.current(session)` |
 
-本 bundle 为插入 `auto` 会整体重述权限预设表，而不是增量追加。未来 `dsh-base` 若新增、重命名或调整权限档，已安装版本不会自动继承这些变化；升级 dsh 时应重新核对并更新 patch，具体步骤见[验收文档](./docs/ACCEPTANCE.md)。
+dsh **0.1.7** 起还有一处不兼容无法靠特性探测化解：`auto` 成为官方 Auto review 的保留档位名。0.7.0 起本插件改用 `sandboxed-auto`，因此可在 0.1.2 之前到 0.2.x 的全部宿主上运行；0.6.x 及更早版本不能用于 dsh 0.1.7+，升级步骤见[从 0.6.x 升级](#从-06x-升级)。
+
+本 bundle 为插入 `sandboxed-auto` 会整体重述权限预设表，而不是增量追加。未来 `dsh-base` 若新增、重命名或调整权限档，已安装版本不会自动继承这些变化；升级 dsh 时应重新核对并更新 patch，具体步骤见[验收文档](./docs/ACCEPTANCE.md)。
 
 ## FAQ
 
@@ -278,7 +328,7 @@ DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API�
 列表页展示 Loader 树的全部插件行，搜 `dsh-auto-approve` 或条目 id `auto-approve` 即可。注意该页快照只在打开 Settings 时读取一次，装完插件后要关掉 Settings 重新打开；该页是官方设计的只读视图，没有启停按钮。
 
 **怎么临时关掉自动批准？**
-把会话权限档切回 `Workspace Write` 即可——插件对非 `auto` 档完全隐形，无需重启，这就是内置的开关。
+把会话权限档切回 `Workspace Write` 即可——插件对 `sandboxed-auto` 之外的档位完全隐形，无需重启，这就是内置的开关。
 
 **怎么彻底停用？**
 在 profile 的用户层补丁 `$DSH_HOME/profiles/web/cordis.patch.yml`（默认 `~/.dsh/profiles/web/`）中追加以下内容并重启 `dsh web`；或直接 `dsh plugin --profile web remove dsh-auto-approve` 卸载：

@@ -55,7 +55,7 @@ function requestOf({
 }
 
 function harness({
-  preset = 'auto',
+  preset = 'sandboxed-auto',
   config = {},
   stream = () => textResponse('{"verdict":"approve"}'),
   current = () => preset,
@@ -1225,7 +1225,7 @@ test('reads events and the preset through the dsh 0.1.2 session API', async () =
   const app = harness({
     current: (arg) => {
       currentArg = arg
-      return 'auto'
+      return 'sandboxed-auto'
     },
     permissionState: () => ({}),
   })
@@ -1243,10 +1243,26 @@ test('still reads the pre-0.1.2 session API when the newer service is absent', a
   const app = harness({
     current: (arg) => {
       currentArg = arg
-      return 'auto'
+      return 'sandboxed-auto'
     },
   })
   const request = requestOf()
   assert.deepEqual(await app.run(request), { result: 'allowed-once', nextCalls: 0 })
   assert.equal(currentArg, request.agent.session.events, 'the older service receives the events array')
+})
+
+test('stands down when the official Auto review preset is selected', async () => {
+  // dsh 0.1.7+ ships its own `auto` preset (no sandbox, per-call review). Its
+  // denials become ordinary approval asks meant for a human; this plugin must
+  // never answer them, so it acts only under its own preset id.
+  const app = harness({
+    preset: 'auto',
+    stream: () => { throw new Error('LLM must stay untouched under the official preset') },
+  })
+  assert.deepEqual(await app.run(), { result: MANUAL, nextCalls: 1 })
+  assert.equal(app.llmCalls, 0)
+})
+
+test('the default preset id avoids the name reserved upstream', () => {
+  assert.equal(Config({}).presetName, 'sandboxed-auto')
 })
