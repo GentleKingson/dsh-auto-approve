@@ -78,7 +78,7 @@ The host-side plugin depends only on dsh's `approval/request` waterfall and the 
 | Frontend | Support | Notes |
 | --- | --- | --- |
 | **Web** (`dsh web`) | ✅ Full | Approval dialogs, the icon shim, and `/permission` switching all work |
-| **Official Desktop** (DeepSeek Harness Desktop, [`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)) | ✅ Supported | The official Electron shell embeds the full Web app, so the host side is identical to Web. Install the plugin from the in-app **Plugins** page; see [Official Desktop](#official-desktop) |
+| **Official Desktop** (DeepSeek Harness Desktop, [`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)) | ✅ Supported | The official Electron shell embeds the full Web app, so the host side is identical to Web. Install the plugin from the in-app **Plugins** page; see [Official Desktop](#official-desktop). The permission-menu icon needs 0.7.1+ |
 | **TUI** ([ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)) | ✅ Supported | Routine escalations are auto-approved by the classifier; dangerous or uncertain requests enter the TUI's Claude Code-style approval panel (`allowed-once`/`rejected` only). The TUI does not wire `/permission` preset switching — set `permission.defaultPreset: sandboxed-auto` in that profile's settings to enter this plugin's preset. The icon shim is Web-DOM only and does not apply in the TUI (cosmetic) |
 | **Community desktop shells** ([xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop), [bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop), et al.) | ✅ Supported | Native windows over the official Web UI that can reuse a running instance on `127.0.0.1:3080`, identical to Web; install as for Web |
 
@@ -118,7 +118,7 @@ dsh plugin --profile web remove dsh-auto-approve
 
 ### Official Desktop
 
-The official Desktop owns its own profile (`$DSH_HOME/profiles/desktop`), and **the CLI cannot install plugins into it** — the `dsh plugin --profile …` commands above do not apply. Install from inside the app:
+The official Desktop uses its own profile (`$DSH_HOME/profiles/desktop`). Installing from inside the app is recommended:
 
 1. Open the sidebar **Plugins** page and choose to install an external bundle;
 2. Enter the package name `dsh-auto-approve` (Desktop uses its bundled pnpm and installs by name from npm; no Node or pnpm is needed on the machine);
@@ -126,6 +126,10 @@ The official Desktop owns its own profile (`$DSH_HOME/profiles/desktop`), and **
 4. Choose `Sandboxed Auto` in the composer's permission selector.
 
 Compatibility: Desktop runs the host and plugins in Electron's embedded Node (Node 24 in Electron 44), which satisfies this package's `engines`. The package has no runtime dependencies, and `@deepseek-ai/schemastery` is supplied by Desktop's runtime resolution layer, so no second copy appears. Desktop's Web Host listens on port `19387` by default (Web uses `3080`); the plugin does not depend on the port.
+
+If you installed 0.7.0, upgrade to **0.7.1**: from dsh 0.2.0 the permission menu is mounted at the top level of the page, and 0.7.0 shows no icon on the menu entry in Desktop (approvals are unaffected).
+
+Local development: **quit Desktop** first, then run the app's bundled CLI (`/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`) with `dsh plugin --profile desktop add link:<path to your checkout>`, and reopen the app. Changing the profile's dependencies while the app is running can freeze the UI.
 
 Uninstall from the same **Plugins** page. If the plugin keeps Desktop from starting, Desktop's native recovery dialog offers to disable third-party plugins.
 
@@ -135,7 +139,7 @@ Uninstall from the same **Plugins** page. If the plugin keeps Desktop from start
 
 **Before** upgrading dsh to 0.1.7 or later, in order:
 
-1. Upgrade the plugin: `dsh plugin --profile web add dsh-auto-approve@0.7.0` (pin the version; `@latest` can resolve to an older release through pnpm's cached metadata);
+1. Upgrade the plugin: `dsh plugin --profile web add dsh-auto-approve@0.7.1` (pin the version; `@latest` can resolve to an older release through pnpm's cached metadata);
 2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`);
 3. If a profile `cordis.patch.yml` overrides this plugin's config with `presetName: auto`, change that to `sandboxed-auto` as well;
 4. Then upgrade dsh and restart.
@@ -305,7 +309,7 @@ Use `workspace-write` when every escalation must receive human review. Add deplo
 
 ## Known limitations
 
-The Permissions selector in DeepSeek Harness does not expose an API for custom preset icons. The plugin therefore uses a best-effort browser compatibility layer to recognize the `Sandboxed Auto` trigger and menu item and add the icon. The layer depends on the host's DOM structure and accessible copy: the menu must show `Sandboxed Auto` alongside at least two built-in preset labels (English `Read Only` / `Workspace Write` / `Full access`, or the Chinese labels shipped from 0.1.2 on). If dsh changes that copy or structure again the icon may disappear — a cosmetic failure only, with no effect on automatic approvals, danger rules, or the human fallback.
+The Permissions selector in DeepSeek Harness does not expose an API for custom preset icons. The plugin therefore uses a best-effort browser compatibility layer to recognize the `Sandboxed Auto` trigger and menu item and add the icon. The layer depends on the host's DOM structure and accessible copy: the menu must show `Sandboxed Auto` alongside at least two built-in preset labels (English `Read Only` / `Workspace Write` / `Full access`, or the Chinese labels shipped from 0.1.2 on). From dsh 0.2.0 the menu is mounted under `<body>` instead of next to its trigger; from 0.7.1 the layer recognizes that structure too, checking direct `<body>` menus only while a permission trigger is on the page. If dsh changes that copy or structure again the icon may disappear — a cosmetic failure only, with no effect on automatic approvals, danger rules, or the human fallback.
 
 ### Host version compatibility
 

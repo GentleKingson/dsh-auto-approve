@@ -243,8 +243,12 @@ test('marks bilingual Auto triggers and only their validated permission menu row
   const en = permissionControl(document, 'Access mode, current: Sandboxed Auto')
   const zh = permissionControl(document, '访问模式，当前：Sandboxed Auto')
   const inactive = permissionControl(document, 'Access mode, current: Workspace Write')
+  // A lookalike nested away from both the trigger and <body> is never a
+  // permission menu, whatever its labels.
   const unrelated = permissionMenu()
-  document.body.appendChild(unrelated.menu)
+  const elsewhere = new FakeElement('div')
+  elsewhere.appendChild(unrelated.menu)
+  document.body.appendChild(elsewhere)
   const beforeChildren = en.trigger.children.length
   const app = browserHarness({ document })
 
@@ -317,6 +321,46 @@ test('discovers an opened permission menu while Workspace Write is current', () 
   assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
   app.dispose()
   assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
+})
+
+test('finds the menu the dsh 0.2.0 picker portals to <body>', () => {
+  const document = new FakeDocument()
+  const wrapper = new FakeElement('span')
+  const trigger = new FakeElement('button')
+  trigger.setAttribute('aria-label', '访问模式，当前：Sandboxed Auto')
+  trigger.appendChild(new FakeElement('span', 'Sandboxed Auto'))
+  wrapper.appendChild(trigger)
+  document.body.appendChild(wrapper)
+  const app = browserHarness({ document })
+  app.apply()
+  app.flushFrames()
+  assert.equal(trigger.getAttribute(ICON_ATTRIBUTE), 'trigger')
+
+  const { menu, items } = permissionMenu(['仅可查看', '工作区内修改', 'Sandboxed Auto', '完全权限'])
+  document.body.appendChild(menu)
+  app.observers[0].notify([{
+    type: 'childList',
+    target: document.body,
+    addedNodes: [menu],
+    removedNodes: [],
+  }])
+  assert.equal(app.frames.size, 1, 'a portaled menu schedules a scan')
+  app.flushFrames()
+  assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), 'menu')
+  assert.equal(items.get('仅可查看').getAttribute(ICON_ATTRIBUTE), null)
+  app.dispose()
+  assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
+})
+
+test('ignores body-level menus when no permission trigger is on the page', () => {
+  const document = new FakeDocument()
+  const { menu, items } = permissionMenu()
+  document.body.appendChild(menu)
+  const app = browserHarness({ document })
+  app.apply()
+  app.flushFrames()
+  assert.equal(items.get('Sandboxed Auto').getAttribute(ICON_ATTRIBUTE), null)
+  app.dispose()
 })
 
 test('rejects lookalike menus and removes stale marks and owned CSS on dispose', () => {

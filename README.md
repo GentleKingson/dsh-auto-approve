@@ -77,7 +77,7 @@ dsh 0.1.7 起随安装附带一个**实验性**的官方权限档 **Auto review*
 | 前端 | 支持 | 说明 |
 | --- | --- | --- |
 | **Web**（`dsh web`） | ✅ 完整支持 | 审批对话框、图标兼容层、`/permission` 切换全部可用 |
-| **官方桌面端**（DeepSeek Harness Desktop，[`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)） | ✅ 支持 | 官方 Electron 壳内嵌完整 Web 应用，宿主侧与 Web 完全相同。插件需在应用内「插件」页安装，见[官方桌面端](#官方桌面端) |
+| **官方桌面端**（DeepSeek Harness Desktop，[`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)） | ✅ 支持 | 官方 Electron 壳内嵌完整 Web 应用，宿主侧与 Web 完全相同。插件需在应用内「插件」页安装，见[官方桌面端](#官方桌面端)。权限菜单里的图标需 0.7.1+ |
 | **TUI**（[ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)） | ✅ 支持 | 例行升级由分类器自动批；危险/拿不准时进入 TUI 的 Claude Code 风格审批面板（仅 `allowed-once` / `rejected`）。注意：TUI 未接入 `/permission` 预设切换，需在该 profile 的 settings 中设置 `permission.defaultPreset: sandboxed-auto` 才能进入本插件的档位；图标兼容层为 Web DOM 专属，TUI 中不生效（纯视觉） |
 | **社区桌面壳**（[xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop)、[bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop) 等） | ✅ 支持 | 包裹官方 Web UI 的原生窗口，可复用本机 `127.0.0.1:3080` 实例，与 Web 体验一致；按 Web 的方式安装 |
 
@@ -117,7 +117,7 @@ dsh plugin --profile web remove dsh-auto-approve
 
 ### 官方桌面端
 
-官方桌面端独占自己的 profile（`$DSH_HOME/profiles/desktop`），**CLI 不能向它安装插件**，上面的 `dsh plugin --profile …` 命令对桌面端无效。请在应用内安装：
+官方桌面端使用自己的 profile（`$DSH_HOME/profiles/desktop`），推荐在应用内安装：
 
 1. 打开侧栏的「**插件**」页，选择安装外部组合包；
 2. 输入包名 `dsh-auto-approve`（桌面端使用内置 pnpm，按包名从 npm 安装，无需本机装有 Node 或 pnpm）；
@@ -125,6 +125,10 @@ dsh plugin --profile web remove dsh-auto-approve
 4. 在输入框的权限选择器中选择 `Sandboxed Auto`。
 
 兼容性说明：桌面端在 Electron 内置的 Node（Electron 44 为 Node 24）中运行宿主与插件，满足本包的 `engines` 要求；本包零运行时依赖，`@deepseek-ai/schemastery` 由桌面端运行时解析层提供，不会出现第二份副本。桌面端 Web Host 默认监听 `19387` 端口（Web 为 `3080`），本插件不依赖端口。
+
+已装 0.7.0 的用户请升级到 **0.7.1**：dsh 0.2.0 起权限菜单改为挂在页面最外层，0.7.0 在桌面端的菜单项上不显示图标（审批功能不受影响）。
+
+本地开发调试：先**退出桌面端**，再用应用自带的 CLI（`/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`）执行 `dsh plugin --profile desktop add link:<本地仓库路径>`，然后重新打开应用。应用运行时改动 profile 依赖可能导致界面卡死。
 
 卸载同样在「插件」页操作。若插件导致桌面端启动失败，桌面端的原生恢复对话框提供「禁用第三方插件」选项。
 
@@ -134,7 +138,7 @@ dsh plugin --profile web remove dsh-auto-approve
 
 升级 dsh 到 0.1.7 或更高版本**之前**，按顺序完成：
 
-1. 升级插件：`dsh plugin --profile web add dsh-auto-approve@0.7.0`（请写明版本号，`@latest` 可能被 pnpm 缓存的元数据解析到旧版）；
+1. 升级插件：`dsh plugin --profile web add dsh-auto-approve@0.7.1`（请写明版本号，`@latest` 可能被 pnpm 缓存的元数据解析到旧版）；
 2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；
 3. 若在 profile 的 `cordis.patch.yml` 里覆盖过本插件配置并写了 `presetName: auto`，同样改为 `sandboxed-auto`；
 4. 再升级 dsh 并重启。
@@ -304,7 +308,7 @@ dsh 的沙箱升级没有路径粒度：模型能申请的目标只有 `danger-f
 
 ## 已知限制
 
-DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API。本插件因此通过浏览器侧的 best-effort 兼容层识别 `Sandboxed Auto` 触发器和菜单项，再补上图标。该兼容层依赖宿主的 DOM 结构与无障碍文案：菜单需同时出现 `Sandboxed Auto` 与至少两个内置档位标签（英文 `Read Only` / `Workspace Write` / `Full access`，或 0.1.2 起的中文「仅可查看」「工作区内修改」「完全权限」）。dsh 再次改动这些文案或结构后，图标可能消失——这种失效只影响图标显示，不影响自动审批、危险规则或人工兜底。
+DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API。本插件因此通过浏览器侧的 best-effort 兼容层识别 `Sandboxed Auto` 触发器和菜单项，再补上图标。该兼容层依赖宿主的 DOM 结构与无障碍文案：菜单需同时出现 `Sandboxed Auto` 与至少两个内置档位标签（英文 `Read Only` / `Workspace Write` / `Full access`，或 0.1.2 起的中文「仅可查看」「工作区内修改」「完全权限」）。dsh 0.2.0 起该菜单被挂到 `<body>` 下、不再与触发器相邻，0.7.1 起兼容层同时识别这种结构（仅在页面上存在权限触发器时才检查 `<body>` 的直接子菜单）。dsh 再次改动这些文案或结构后，图标可能消失——这种失效只影响图标显示，不影响自动审批、危险规则或人工兜底。
 
 ### 宿主版本兼容
 

@@ -49,7 +49,9 @@ window.__ModuleLoader__.load({
   height: 14px;
 }
 [${ICON_ATTRIBUTE}="menu"]::before {
-  color: var(--dsw-alias-label-tertiary);
+  width: 14px;
+  height: 14px;
+  color: var(--dsw-alias-menu-icon, var(--dsw-alias-label-tertiary));
 }
 @container (max-width: 460px) {
   [${ICON_ATTRIBUTE}="trigger"] > span:first-of-type {
@@ -126,6 +128,16 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
+    function directMenus(parent) {
+      const menus = []
+      try {
+        for (const child of parent?.children ?? []) {
+          if (child.getAttribute?.('role') === 'menu') menus.push(child)
+        }
+      } catch {}
+      return menus
+    }
+
     function permissionAutoItem(menu) {
       try {
         const items = Array.from(menu.querySelectorAll('button[role="menuitem"]'))
@@ -192,13 +204,24 @@ window.__ModuleLoader__.load({
       }
       const scan = () => {
         const active = new Map()
+        const menus = new Set()
+        let sawTrigger = false
         const triggers = Array.from(document.querySelectorAll(TRIGGER_SELECTOR))
         for (const trigger of triggers) {
           const label = trigger.getAttribute?.('aria-label')
           if (!permissionTriggerLabel(label)) continue
+          sawTrigger = true
           if (TRIGGER_LABELS.has(label)) active.set(trigger, 'trigger')
           const menu = directMenu(trigger.parentElement)
-          if (menu === undefined) continue
+          if (menu !== undefined) menus.add(menu)
+        }
+        // From dsh 0.2.0 the picker portals its menu to <body>, so it is no
+        // longer the trigger's sibling. Body-level menus are considered only
+        // while a permission trigger is on the page.
+        if (sawTrigger) {
+          for (const menu of directMenus(document.body)) menus.add(menu)
+        }
+        for (const menu of menus) {
           const autoItem = permissionAutoItem(menu)
           if (autoItem !== undefined) active.set(autoItem, 'menu')
         }
