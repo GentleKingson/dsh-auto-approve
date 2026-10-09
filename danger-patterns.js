@@ -43,12 +43,12 @@ export function simpleCommandWords(command) {
     } else if (char === "'" || char === '"') {
       quote = char
       started = true
-    } else if (/\s/.test(char)) {
+    } else if (char === ' ' || char === '\t') {
       if (started) words.push(word)
       word = ''
       started = false
     } else {
-      if (/[;&|<>$`\\(){}*?\[\]#]/.test(char)) return undefined
+      if (/[\s\p{White_Space};&|<>$`\\(){}*?\[\]#]/u.test(char)) return undefined
       word += char
       started = true
     }
@@ -84,8 +84,8 @@ export function inspectCommand(command, { workdir = '/' } = {}) {
   if (words === undefined) return result('uncertain')
   let args = words.slice(1)
   let executable = words[0].split('/').at(-1)
-  if (words[0] === 'echo' || words[0] === 'printf') return result(undefined, 'low', true)
-  if (args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])) return result()
+  if (words[0] === 'echo') return result(undefined, 'low', true)
+  if (executable !== 'printf' && args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])) return result()
   if (executable === 'sudo') {
     if (args.length === 0 || args[0].startsWith('-')) return result('uncertain')
     executable = args[0].split('/').at(-1)
@@ -96,6 +96,11 @@ export function inspectCommand(command, { workdir = '/' } = {}) {
   // underlying action's identity in this bounded reader.
   if (['env', 'command', 'builtin', 'busybox', 'xargs', 'nice', 'nohup', 'timeout'].includes(executable)
     || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) return result('uncertain')
+  if (executable === 'printf') {
+    // -v and %n assign variables; only these fixed string formats are proven output.
+    const format = args[0] === '--' ? args[1] : args[0]
+    return ['%s', '%s\\n'].includes(format) ? result(undefined, 'low', true) : result('uncertain')
+  }
   if (executable === 'find' && args.some(arg => /^-(?:exec|execdir|ok|okdir)$/.test(arg))) return result('untrusted-execution')
   const joined = args.join(' ')
   const operands = args.filter(arg => !arg.startsWith('-'))

@@ -70,7 +70,7 @@ dsh 0.1.7 起随安装附带一个**实验性**的官方权限档 **Auto review*
 
 普通工作分支推送至少按中风险审查。可验证的直接授权形如 `Run: git push origin feature` 或 `请执行：git push origin feature`，需与完整命令及当前范围一致；宽泛任务和命令示例不够。强推、共享/生产分支仍交人工。
 
-`lowRiskFastPath` 默认关闭，只为明确的无重定向、无展开的字面输出提供可选快通行。`shadowMode: true` 会记录候选结果并始终交给宿主，不自行授予权限。尚无真实日志证明误拦下降 20% 的目标已达成。
+字面输出也必须经过模型审批或重验证的低风险模型缓存，没有规则直接授权的出口。`shadowMode: true` 会记录候选结果并始终交给宿主，不自行授予权限。尚无真实日志证明误拦下降 20% 的目标已达成。
 
 ## 适用性矩阵
 
@@ -162,7 +162,6 @@ dsh plugin --profile web remove dsh-auto-approve
 | `dangerPatterns` | `null` | `null` 保留内置风险提示；数组仅替换可配置层，不移除不可覆盖的行动保护。这是对旧替换语义的安全迁移。 |
 | `sessionMemory` | `true` | 只缓存本插件已确认的低风险模型批准；上下文变化、取消或卸载后失效。下游批准不缓存。 |
 | `sessionMemoryTtlMs` | `1800000` | 记忆条目的有效期（默认 30 分钟），过期后重新分类。 |
-| `lowRiskFastPath` | `false` | 可选字面输出快通行；没有真实样本时保持关闭。 |
 | `shadowMode` | `false` | 仅评估和记录候选，所有请求仍交宿主审批，不自动授权或缓存。 |
 
 `provider` 与 `model` 会在每次分类时独立解析，因此有三种常见用法：
@@ -205,7 +204,6 @@ dsh plugin --profile web remove dsh-auto-approve
     timeoutMs: 20000
     extraDangerPatterns:
       - '\bkubectl\s+delete\b'
-    lowRiskFastPath: false
     shadowMode: true
 ```
 
@@ -262,7 +260,7 @@ npm run tune -- \
 
 ### 会话内命令记忆的边界
 
-只记忆本插件的低风险模型批准，完整上下文与原始参数都进入哈希。每次重放先重新校验调用、用户消息及行动保护；当前工作区、工作目录、权限目标、用户消息、模型或策略变化会使旧记忆失效。取消、卸载和重启也清空记忆。下游的 `allowed-once` 无法证明批准者身份，永不学习为授权；中风险批准和快通行结果不缓存。
+只记忆本插件的低风险模型批准，完整上下文与原始参数都进入哈希。每次重放先重新校验调用、用户消息及行动保护；当前工作区、工作目录、权限目标、用户消息、模型或策略变化会使旧记忆失效。取消、卸载和重启也清空记忆。下游的 `allowed-once` 无法证明批准者身份，永不学习为授权；中风险批准不缓存。
 
 最新真人消息及更早的真实限制完整传给分类模型；Agent、插件、工具结果和项目文档不属于授权来源。字面输出、命令名、外部路径或 `origin` 单独出现不会被当成高风险动作。复杂 shell 会保守转人工，有限行动保护与单模型分类仍可能误判；离线固定语料的零误批不能证明现实中零风险。
 
@@ -278,7 +276,7 @@ DSH 的插件安装、运行时权限配置写入及已识别的系统持久化�
 
 `/auto-report` 和插件决策日志仅保留必要元数据。原生 Session log 由宿主保存，可能仍含原始工具参数和理由，分享前需自行脱敏。
 
-回滚先关闭 `lowRiskFastPath`，必要时关闭 `sessionMemory`；切换到 `workspace-write` 或禁用插件可恢复原生人工审批。复现命令、离线指标和未验证的客户端灰度项见[验收说明](./docs/ACCEPTANCE.md)。
+回滚先开启 `shadowMode` 并关闭 `sessionMemory`；切换到 `workspace-write` 或禁用插件可恢复原生人工审批。复现命令、离线指标和未验证的客户端灰度项见[验收说明](./docs/ACCEPTANCE.md)。
 
 ## 已知限制
 
@@ -325,7 +323,6 @@ dsh **0.1.7** 起还有一处不兼容无法靠特性探测化解：`auto` 成�
     presetName: sandboxed-auto
     provider: null
     model: <你 API 中的分类模型 id>
-    lowRiskFastPath: false
 ```
 
 **为什么普通 push 仍然弹窗？**

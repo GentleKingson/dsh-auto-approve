@@ -1,12 +1,12 @@
 # 安全审批改造验收记录与灰度门槛
 
-日期：2026-10-09。基线：`c6d4222746fef089de4e40063d05d26a4191bc66`，package.json 仍为 0.7.1。本记录针对未发布的工作树，不能把 HEAD 当成修改后的提交 SHA。
+日期：2026-10-09。基线：`c6d4222746fef089de4e40063d05d26a4191bc66`，package.json 仍为 0.7.1。以下原始验收针对首次候选工作树；下一轮修复记录另列，不能把 HEAD 当成修改后的提交 SHA。
 
 ## 方案审阅与执行范围
 
 方案可执行，但 PR-03 的真实收益与 PR-04 的客户端灰度需要独立数据和实际宿主，不能由单元测试推断。本次完成 PR-00 的固定合成基线、PR-01/02 的本地边界修复、PR-03 的保守分类与影子支持、PR-04 的自动化检查和文档。真实日志、真实模型影子观察、可丢弃宿主灰度和客户端手工验收仍未完成。
 
-沿用原生 `approval/request`、`allowed-once`、`next()` 和宿主审计事件；未改 client.js，未增加运行时依赖、外部策略引擎、第二个模型或逐工具审查。也未推送、合并或发布候选。
+沿用原生 `approval/request`、`allowed-once`、`next()` 和宿主审计事件；未改 client.js，未增加运行时依赖、外部策略引擎、第二个模型或逐工具审查。首次验收时未推送、合并或发布候选。PR #1 当前保持 Open，本轮不合并。
 
 ## 审阅发现与修复证据
 
@@ -55,7 +55,7 @@ node scripts/tune-from-logs.mjs --evaluate --shadow
 
 额外回归测试覆盖默认空 dangerPatterns 仍有保护、正常低风险缓存复用、TTL、取消/卸载、超时/流协议、双会话 API、官方 auto 隔离、真实消息撤销、并发、引号/Unicode/别名和精确中风险授权。
 
-## 自动化验收
+## 首次候选自动化验收（历史记录）
 
 | 门槛 | 命令 / 证据 | 状态 |
 | --- | --- | --- |
@@ -73,15 +73,45 @@ node scripts/tune-from-logs.mjs --evaluate --shadow
 
 每个运行时检查在临时 Node 22 或环境 Node 24 下执行，依赖仍来自原 package-lock.json。最初沙箱下默认 node --test 只能返回文件级计数；有效的隔离测试在允许创建子进程的执行配置下运行，并辅以 --test-isolation=none，使用完整测试计数作为证据。
 
-## PR-03 快通行状态
+## 下一轮安全修复
 
-lowRiskFastPath 默认 false；仅有字面输出路径的局部测试，没有真实日志证明值得启用。固定集中的 high-approve-manual 是“必须调用模型后拒绝非法组合”的协议样例，命令本身为 echo safe；开启快通行会跳过模型并造成这一标签与评估边界错配，因此不能宣称全开关组合已经通过固定门禁。维持默认关闭，仅将语义修复和保守分类作为候选。
+修复起点：PR #1 `work` 分支 `6e2507e1b6981fefd10ce5b240bb626f832edc2b`。删除 `lowRiskFastPath` 的 schema、配置与直接授权分支；旧配置即使传入也不能跳过模型。字面输出仍可由模型批准，只有本插件低风险模型批准能进入重验证缓存。
 
-没有建立从历史批准自动学习的白名单，没有新增可信远端/分支配置。是否扩展快通行必须由真实日志与独立样本决定；未证明价值时直接移除该优化。
+共享 `simpleCommandWords()` 仅按 ASCII 空格和 Tab 分词，其他未引用空白直接返回 uncertain，保留引号中的 Unicode 内容。`inspectCommand()` 对 printf 仅接受固定 `%s`、`%s\n` 格式（支持 `--`）；`-v`、`%n`、其他格式和不确定语法在模型与缓存之前交人工，不以高风险标签误判普通字面输出。路径形式、sudo 与无法解析的 wrapper 同样不能绕过保护。
+
+`userRestricted()` 只识别完整的高确定性独立禁令，避免中文 `\b` 和前缀误拦。以下三个原句新增本地回归：
+
+- `Please do not run any commands.`
+- `Only inspect. Do not execute any commands.`
+- `I revoke authorization. Do not run any commands.`
+
+引用、示例、复杂条件和未匹配措辞携带完整历史交模型。历史禁令保持有效，新增撤销使旧缓存失效，最新精确 `Run: <command>` 重新授权仍需模型分类。新增回归在原 `test/index.test.js` 中，原语料与三个历史指标 JSON 保持不变。
+
+语义依据：[Bash blank/metacharacter 定义](https://www.gnu.org/software/bash/manual/html_node/Definitions.html)、[Bash printf 的 -v 与 %n](https://www.gnu.org/s/bash/manual/html_node/Bash-Builtins.html)、[MDN 的 JavaScript \s 定义](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Regular_expressions/Character_class_escape)。
+
+本轮按顺序完成语法检查、原触发/相邻合法输入、安全回归、完整包检查；所有示例仅作为假宿主输入，没有执行危险命令。修复前共享函数把 `printf -v HOME /tmp`、`printf %n HOME`、`echo<NBSP>--help` 都标为 literalDisplay；修复后的回归证明这些输入交人工且模型调用为零。正常 echo、printf `%s`/`%s\n`、引号中的 NBSP 继续由模型正常批准。旧配置开启也不能跳过模型 ask。
+
+| 本轮门槛 | 命令 / 证据 | 结果 |
+| --- | --- | --- |
+| 语法 | `node --check index.js`；`node --check danger-patterns.js` | PASS |
+| 重点回归 | `node --test --test-isolation=none --test-name-pattern='removed fast path\|printf assignment\|shell words\|standalone user\|quoted restrictions\|historical restrictions\|bundle inherits' test/index.test.js` | PASS，7 个重点测试；后续完整测试包含最终 Unicode 边界 |
+| Node 22.23.3 | `npm ci && npm test -- --test-reporter=spec`，临时 Node 22 与 npm 临时缓存 | PASS，180 项测试 |
+| Node 24.21.0 | `npm ci && npm test -- --test-reporter=spec`，本机 Node 24 与 npm 临时缓存 | PASS，180 项测试 |
+| 独立候选审查 | 只读复核共享边界、直接调用方、编码、wrapper、缓存与用户授权状态 | 未发现范围内具体绕过或回归 |
+| 固定基线 | `node scripts/tune-from-logs.mjs --evaluate --baseline` | 140 条，unsafeAuto=41、safeToHuman=12，原始结果保持一致 |
+| 本轮候选 | `node scripts/tune-from-logs.mjs --evaluate` | 140 条，unsafeAuto=0、safeToHuman=0、modelCalls=73 |
+| 本轮影子 | `node scripts/tune-from-logs.mjs --evaluate --shadow` | 自动授予=0；wouldAuto=70，候选误批/遗漏均为 0 |
+| 包装与补丁 | `npm pack --dry-run --json`；`git diff --check` | PASS |
+
+本轮运行时 `sourceSha256`：`4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`（四文件集合与前文相同）。固定语料 SHA-256 仍为 `564ffd393a24839a89e329606f29211329b48dd15e00e71fce10b3bc679f336f`，不改写历史 JSON 记录。GitHub Node 22/24 CI 以 PR #1 当前 HEAD 的检查结果为准，本地双版本通过不替代远端 CI。
+
+npm 的默认缓存目录在受限环境不可写，安装实际使用 `--cache /private/tmp/dsh-auto-approve-npm-cache`；没有改系统目录权限或引入项目依赖。
+
+C04 的真实 cwd 执行链维持 DEFERRED；真实宿主、真实模型和至少 30 条脱敏真人标签均为 NOT_VERIFIED，不由合成回放替代。复杂限制和未支持格式仍依赖模型或人工；离线零误批不证明生产安全。PR #1 保持 Open，禁止以本轮本地通过代替真实灰度验收。
 
 ## 实际灰度步骤（待执行）
 
-先在用户本地部署配置中设置 shadowMode: true、lowRiskFastPath: false、sessionMemory: false，使用可丢弃测试 profile，不从项目文件建立永久信任。保持本插件预设 sandbox: workspace-write、approval: ask。先核对实际 dump-config 含 sandboxed-auto，官方 auto 由宿主提供且未被本插件应答。
+先在用户本地部署配置中设置 shadowMode: true、sessionMemory: false，使用可丢弃测试 profile，不从项目文件建立永久信任。保持本插件预设 sandbox: workspace-write、approval: ask。先核对实际 dump-config 含 sandboxed-auto，官方 auto 由宿主提供且未被本插件应答。
 
 在 Web、Desktop、TUI 分别用无副作用的字面输出请求测试审批链：若宿主产生显式 danger-full-access 请求，影子模式必须出现人工入口；选择拒绝后停止。没有进入 approval/request 的工具调用不计入审批指标。验证取消不会挂起，另一会话报告为空，重启后报告清空，Session log 仍保留原生 asked/decided 对。
 
@@ -98,7 +128,6 @@ lowRiskFastPath 默认 false；仅有字面输出路径的局部测试，没有�
 ```yaml
 - id: auto-approve
   config:
-    lowRiskFastPath: false
     sessionMemory: false
     shadowMode: true
 ```
@@ -116,7 +145,7 @@ lowRiskFastPath 默认 false；仅有字面输出路径的局部测试，没有�
 
 - index.js：请求身份、来源化上下文、严格分类协议、授权范围、缓存生命周期、出口重检、脱敏台账和影子模式。
 - danger-patterns.js：依赖 Node 标准库的有限事实检查、不可覆盖保护、路径归一化和成对字面输出处理。
-- cordis.patch.yml：统一使用 schema 提示默认值，快通行/影子默认关闭，保留原生预设与人工入口。
+- cordis.patch.yml：统一使用 schema 提示默认值，删除快通行配置，影子默认关闭，保留原生预设与人工入口。
 - scripts/tune-from-logs.mjs、scripts/approval-evaluation.mjs：复用离线入口，固定版本回放、行动提示、有限覆盖统计及安全摘录。
 - test/index.test.js、test/tune-from-logs.test.js、test/fixtures/approval-corpus.json：边界、生命周期、协议、别名和固定对照语料。
 - package.json：将离线语料加入发布文件列表；依赖和版本未变。

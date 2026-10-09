@@ -10,7 +10,6 @@
         dangerPatterns: null
         sessionMemory: true
         sessionMemoryTtlMs: 1800000
-        lowRiskFastPath: false
         shadowMode: false
 
 - id: permission

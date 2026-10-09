@@ -58,7 +58,6 @@ export const Config = Schema.object({
   ]).default(null),
   sessionMemory: Schema.boolean().default(true),
   sessionMemoryTtlMs: Schema.number().step(1).min(1).max(2_147_483_647).default(1_800_000),
-  lowRiskFastPath: Schema.boolean().default(false),
   shadowMode: Schema.boolean().default(false),
 })
 
@@ -271,8 +270,11 @@ function userRestricted(verified, userMessage) {
   const words = simpleCommandWords(verified.command ?? '') ?? []
   return userMessage.messages.some(({ text }) => {
     if (typeof text !== 'string') return false
-    if (/^(?:撤销授权|撤回授权|不要执行|禁止执行|不得执行|(?:do not (?:run|execute)|don't (?:run|execute)|never (?:run|execute))\b)/i.test(text.trim())) return true
-    if (/^(?:不要推送|禁止推送|do not push|don't push|never push)/i.test(text.trim())) return words[0] === 'git' && words.includes('push')
+    const restriction = text.trim()
+    if (/^(?:请)?(?:不要|禁止|不得)(?:执行|运行)(?:(?:任何|所有|这些|这个|该)?(?:命令|指令))?[。！.!]?$/.test(restriction)
+      || /^(?:(?:Only inspect|I revoke authorization)\. )?(?:please )?(?:do not|don't|never) (?:run|execute)(?: (?:any |all |these |this |the )?(?:commands?|shell commands?))?[.!]?$/i.test(restriction)
+      || /^(?:(?:撤销|撤回)授权|(?:I )?(?:revoke|withdraw)(?: my)? (?:authorization|permission))[。！.!]?$/i.test(restriction)) return true
+    if (/^(?:不要推送|禁止推送|(?:do not|don't|never) push(?: (?:this|the) branch)?)(?:[。！.!]|\. Authorization revoked\.)?$/i.test(restriction)) return words[0] === 'git' && words.includes('push')
     return false
   })
 }
@@ -658,7 +660,6 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
         const remembered = memory.lookup(session.id, memoryKey)
         if (remembered !== undefined && action.minimumRisk === 'low') return approve('cache', 'routine', `verdict=remembered source=${remembered.source}`, 'low')
       }
-      if (config.lowRiskFastPath && action.literalDisplay) return approve('rule', 'literal-display', 'verdict=approve', 'low')
       const decision = await trackClassification(() => classify(ctx, req, config, {
         toolName: req.toolName,
         command: verified.command,

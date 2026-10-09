@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { inspectCommand, simpleCommandWords } from '../danger-patterns.js'
 import { evaluateCorpus, evaluationRequest } from '../scripts/approval-evaluation.mjs'
 import * as plugin from '../index.js'
 import {
@@ -1415,6 +1416,7 @@ test('literal output and dangerous words in justification are context rather tha
   for (const command of ["echo 'DROP TABLE demo'", "printf '%s\\n' 'rm -rf /'", 'echo /etc origin']) {
     assert.deepEqual(await app.run(requestOf({ command, reason: 'escalate sandbox to danger-full-access: document why we must not git push --force' })), { result: 'allowed-once', nextCalls: 0 })
   }
+  assert.equal(app.llmCalls, 3)
   await app.dispose()
 })
 
@@ -1454,19 +1456,115 @@ test('classification and logging cannot approve after preset, user or call evide
   await app.dispose()
 })
 
-test('fast path is opt-in and shadow evaluates without granting or remembering', async () => {
-  assert.equal(Config({}).lowRiskFastPath, false)
+test('removed fast path cannot bypass model classification and shadow never grants or remembers', async () => {
+  assert.equal(Config({}).lowRiskFastPath, undefined)
   const req = requestOf({ command: "printf '%s\\n' 'DROP TABLE demo'" })
-  const fast = harness({ config: { lowRiskFastPath: true } })
-  assert.deepEqual(await fast.run(req), { result: 'allowed-once', nextCalls: 0 })
-  assert.equal(fast.llmCalls, 0)
+  const app = harness({ config: { lowRiskFastPath: true }, stream: () => textResponse('{"risk":"low","verdict":"ask","reasonCode":"uncertain"}') })
+  assert.deepEqual(await app.run(req), { result: MANUAL, nextCalls: 1 })
+  assert.equal(app.llmCalls, 1)
   const shadow = harness({ config: { shadowMode: true } })
   assert.deepEqual(await shadow.run(req), { result: MANUAL, nextCalls: 1 })
   assert.deepEqual(await shadow.run(req), { result: MANUAL, nextCalls: 1 })
   assert.equal(shadow.llmCalls, 2)
   assert.match((await shadow.runCommand(req)).text, /影子评估 2 条/)
-  await fast.dispose()
+  await app.dispose()
   await shadow.dispose()
+})
+
+test('printf assignment and unproven formats hand off locally while string output reaches the model', async () => {
+  const app = harness({ config: { dangerPatterns: [] } })
+  for (const command of [
+    "printf -v 'items[$(echo marker)]' '%s' value",
+    "printf -vHOME '%s' value", "printf -v HOME '%s' value",
+    "printf '%n' HOME", "printf -- '%s%n' safe HOME",
+    "printf '\\x25n' HOME", "printf '%b' safe", 'printf', 'printf --help',
+    "/usr/bin/printf '%n' HOME", "sudo printf -v HOME '%s' value",
+    "builtin printf '%n' HOME", "command printf '%n' HOME",
+  ]) {
+    assert.equal(inspectCommand(command).literalDisplay, false, command)
+    assert.deepEqual(await app.run(requestOf({ command })), { result: MANUAL, nextCalls: 1 }, command)
+  }
+  assert.equal(app.llmCalls, 0)
+  for (const command of ["printf '%s' value", "printf '%s\\n' value", "printf -- '%s' '-v %n'", "echo 'printf -v HOME %n'"]) {
+    assert.equal(inspectCommand(command).literalDisplay, true, command)
+    assert.deepEqual(await app.run(requestOf({ command })), { result: 'allowed-once', nextCalls: 0 }, command)
+  }
+  assert.equal(app.llmCalls, 4)
+  await app.dispose()
+})
+
+test('shell words split on ASCII blanks and reject unsupported unquoted whitespace', async () => {
+  const app = harness({ config: { dangerPatterns: [] } })
+  for (const whitespace of ['\u00a0', '\u000b', '\u000c', '\u0085', '\u1680', '\u2003', '\u2028', '\u2029', '\u202f', '\u3000', '\ufeff']) {
+    for (const command of [`echo${whitespace}--help`, `echo ${whitespace}safe`, `printf${whitespace}'%s' safe`]) {
+      assert.equal(simpleCommandWords(command), undefined, command)
+      assert.deepEqual(await app.run(requestOf({ command })), { result: MANUAL, nextCalls: 1 }, command)
+    }
+  }
+  assert.equal(app.llmCalls, 0)
+  for (const command of ['echo\tsafe', ' echo  safe ', "echo 'a\u00a0b'", 'echo "a\u00a0b"', "printf\t'%s' safe"]) {
+    assert.equal(inspectCommand(command).literalDisplay, true, command)
+    assert.deepEqual(await app.run(requestOf({ command })), { result: 'allowed-once', nextCalls: 0 }, command)
+  }
+  assert.equal(app.llmCalls, 5)
+  await app.dispose()
+})
+
+test('standalone user command restrictions prevent approval even with an approving model', async () => {
+  const app = harness()
+  for (const text of [
+    'Please do not run any commands.',
+    'Only inspect. Do not execute any commands.',
+    'I revoke authorization. Do not run any commands.',
+    '不要执行任何命令。', '禁止执行命令。', '不得运行命令。', '撤销授权。',
+    'Do not execute this command.', "Don't execute commands.",
+  ]) {
+    const req = requestOf({ command: 'echo safe' })
+    req.agent.session.events.unshift(userEvent(text))
+    assert.deepEqual(await app.run(req), { result: MANUAL, nextCalls: 1 }, text)
+  }
+  assert.equal(app.llmCalls, 0)
+  await app.dispose()
+})
+
+test('quoted restrictions, examples and conditions reach the model with complete context', async () => {
+  const app = harness({ config: { sessionMemory: false } })
+  for (const text of [
+    'Document the sentence "Please do not run any commands." in README.',
+    'Do not run is documentation wording.',
+    'Do not execute any commands. Explain this example in README.',
+    '不要执行命令这句话需要加入文档。',
+    'If the tests fail, do not execute any commands.',
+  ]) {
+    const req = requestOf({ command: 'echo safe' })
+    req.agent.session.events.unshift(userEvent(text))
+    assert.deepEqual(await app.run(req), { result: 'allowed-once', nextCalls: 0 }, text)
+    const evidence = JSON.parse(app.lastLlmOptions.messages[0].content[0].text)
+    assert.equal(evidence.latestUserMessage, text)
+    assert.equal(evidence.userMessages[0].text, text)
+  }
+  assert.equal(app.llmCalls, 5)
+  await app.dispose()
+})
+
+test('historical restrictions and revocation invalidate cached approval; exact reauthorization calls the model', async () => {
+  const app = harness()
+  const command = 'echo safe'
+  const req = requestOf({ command })
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  req.agent.session.events.push(userEvent('I revoke authorization. Do not run any commands.', 'user-2'))
+  assert.deepEqual(await app.run(req), { result: MANUAL, nextCalls: 1 })
+  req.agent.session.events.push(userEvent('Inspect the source.', 'user-3'))
+  assert.deepEqual(await app.run(req), { result: MANUAL, nextCalls: 1 })
+  assert.equal(app.llmCalls, 1)
+  req.agent.session.events.push(userEvent(`Run: ${command}`, 'user-4'))
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 2)
+  const evidence = JSON.parse(app.lastLlmOptions.messages[0].content[0].text)
+  assert.equal(evidence.userMessages.length, 3)
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 2)
+  await app.dispose()
 })
 
 test('filesystem tool identity and security targets use their native parameter shapes', async () => {
@@ -1545,11 +1643,11 @@ test('relative credential and runtime targets are checked in the effective workd
   await app.dispose()
 })
 
-test('bundle inherits the single protocol default and keeps experimental shortcuts off', async () => {
+test('bundle inherits the single protocol default without the removed shortcut', async () => {
   const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
   assert.doesNotMatch(patch, /classifierPrompt:/)
   assert.match(patch, /presetName: sandboxed-auto/)
-  assert.match(patch, /lowRiskFastPath: false/)
+  assert.doesNotMatch(patch, /lowRiskFastPath/)
   assert.match(patch, /shadowMode: false/)
   assert.match(Config({}).classifierPrompt, /"risk":"low\|medium\|high"/)
 })

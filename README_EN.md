@@ -71,7 +71,7 @@ The host API remains `allowed-once` or `next()`. Official `auto` and other prese
 
 Developer-branch pushes have a medium-risk floor. A supported direct authorization is `Run: git push origin feature` or `请执行：git push origin feature`, matching the complete command and current scope. Broad tasks and command examples are insufficient; force and shared/production pushes always ask.
 
-`lowRiskFastPath` defaults to false and only optionally bypasses the model for bounded literal output without expansion or redirection. `shadowMode: true` records candidate decisions and always delegates without granting permission. No real logs establish the 20% false-handoff reduction target yet.
+Literal output also requires model approval or a revalidated low-risk model cache entry; rules never grant permission directly. `shadowMode: true` records candidate decisions and always delegates without granting permission. No real logs establish the 20% false-handoff reduction target yet.
 
 ## Compatibility
 
@@ -163,7 +163,6 @@ Uninstall from the same **Plugins** page. If the plugin keeps Desktop from start
 | `dangerPatterns` | `null` | null retains built-in risk hints; arrays replace only the configurable layer, preserving action invariants. This tightens the old replacement semantics. |
 | `sessionMemory` | `true` | Cache only the plugin’s own low-risk model approvals; context changes, cancellation or unload invalidate them. Downstream grants are not cached. |
 | `sessionMemoryTtlMs` | `1800000` | Lifetime of a memory entry (30 minutes by default); after that the call is classified again. |
-| `lowRiskFastPath` | `false` | Optional bounded literal-output shortcut; keep disabled without real evidence. |
 | `shadowMode` | `false` | Evaluate candidates but always delegate; no automatic grant or memory writes. |
 
 `provider` and `model` are resolved independently for every classification, which supports three common setups:
@@ -206,7 +205,6 @@ The default prompt has one source in index.js Config. The bundle no longer copie
     timeoutMs: 20000
     extraDangerPatterns:
       - '\bkubectl\s+delete\b'
-    lowRiskFastPath: false
     shadowMode: true
 ```
 
@@ -263,7 +261,7 @@ Duplicate rules are deduplicated; an invalid regular expression reports an error
 
 ### Limits of session memory
 
-Only the plugin's own low-risk model grants enter memory; complete context and raw arguments enter the hash. Each replay revalidates the call, user restrictions and action guards. Workspace, workdir, target, user revision, model or policy changes invalidate old entries; cancellation, unload and restart clear them too. A downstream allowed-once does not identify an approver and is never learned as authority. Medium grants and shortcut decisions are not cached.
+Only the plugin's own low-risk model grants enter memory; complete context and raw arguments enter the hash. Each replay revalidates the call, user restrictions and action guards. Workspace, workdir, target, user revision, model or policy changes invalidate old entries; cancellation, unload and restart clear them too. A downstream allowed-once does not identify an approver and is never learned as authority. Medium grants are not cached.
 
 Genuine user restrictions, including earlier messages, reach the classifier intact. Agent, plugin, tool output and project documents cannot authorize actions. Literal mentions, command names, outside paths or origin alone do not establish high risk. Complex shell is conservatively delegated. Finite action guards and one model can still misclassify; zero errors in fixed offline fixtures do not prove zero real-world risk.
 
@@ -279,7 +277,7 @@ Use workspace-write for human review on every escalation. Classification sends c
 
 The plugin report and decision logs retain metadata only. Native Session log is host-owned and may still contain original arguments and reasons; redact it before sharing.
 
-Rollback starts by disabling lowRiskFastPath and, if needed, sessionMemory. Switch to workspace-write or disable the plugin for native human approval. Reproduction commands, offline metrics and unverified client rollout gates are in the [acceptance guide](./docs/ACCEPTANCE.md).
+Rollback starts by enabling shadowMode and disabling sessionMemory. Switch to workspace-write or disable the plugin for native human approval. Reproduction commands, offline metrics and unverified client rollout gates are in the [acceptance guide](./docs/ACCEPTANCE.md).
 
 ## Known limitations
 
@@ -326,7 +324,6 @@ The classifier follows Settings → Models. Override only the required fields, t
     presetName: sandboxed-auto
     provider: null
     model: <classifier model id from your API>
-    lowRiskFastPath: false
 ```
 
 **Why does an ordinary push still prompt?**
