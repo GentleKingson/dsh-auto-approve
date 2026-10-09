@@ -19,3 +19,39 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # Real-host integration on a pinned DSH release over ACP. Model responses come
+  # from a local scripted endpoint; see docs/ACCEPTANCE.md for scope.
+  dsh-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      # Supplies the peer @deepseek-ai/schemastery to the linked checkout.
+      - run: npm ci
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      - name: Run DSH ACP integration
+        run: >-
+          node scripts/ci-dsh-integration.mjs
+          --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --root "$RUNNER_TEMP/dsh-integration"
+          --evidence "$RUNNER_TEMP/dsh-integration-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-integration-evidence
+          path: ${{ runner.temp }}/dsh-integration-evidence
+          if-no-files-found: error
+          retention-days: 30

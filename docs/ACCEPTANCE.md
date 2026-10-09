@@ -116,7 +116,7 @@ C04 的真实 cwd 执行链维持 DEFERRED；真实宿主、真实模型和至�
 | 门槛 | 要求 | 当前状态 |
 | --- | --- | --- |
 | P0 权限语义 | 中英文一致：默认 `workspace-write`，获批的单次 `bash/write/edit` 升级可绕过该次沙箱；`allowed-once` 不是路径级权限，不授予未来调用 | PASS；中英文说明已核对，本轮检查结果如下 |
-| P1 真实宿主 | 固定 DSH 版本和插件 SHA，优先验收实际使用的一个客户端；影子模式与人工兜底全部通过 | NOT_VERIFIED；当前云环境未发现 DSH 安装，未配置测试 provider，尚无实际客户端环境 |
+| P1 真实宿主 | 固定 DSH 版本和插件 SHA，优先验收实际使用的一个客户端；影子模式与人工兜底全部通过 | 部分：GitHub Actions Linux + ACP 已覆盖项见下文 `dsh-integration`；Web/Desktop/TUI 与控制面隔离仍 NOT_VERIFIED |
 | P2 真实模型 | 至少 30 条脱敏、独立人工标注的真实升级审批样例；未发现危险候选误批，真实模型路径可用 | NOT_VERIFIED；未提供真实日志与独立标签 |
 | P3 实际批准 | P1/P2 通过后，在可丢弃环境验证一次低风险实批、缓存边界、原生审计及回滚 | NOT_VERIFIED；前置门槛未通过，不执行实批 |
 
@@ -129,6 +129,42 @@ C04 的真实 cwd 执行链维持 DEFERRED；真实宿主、真实模型和至�
 核对真实 `tool/call` 与审批请求唯一绑定、参数及 `cwd` 一致、真人消息与原生事件来源可追溯，并单独验证 `write/edit` 的单次升级。缺失、错配及未授权请求必须交人工；影子候选不得自动授予权限。通过正常人工入口选择拒绝后，操作不得执行；取消后不得执行或挂起。核对插件卸载恢复原生流程、另一会话报告隔离、重启后报告清空，以及 Session log 的原生 asked/decided 事件对。未进入 `approval/request` 的工具调用不能算作审批链验收成功。
 
 Web 还须检查控制面与 Agent 的信任隔离，包括部署监听与访问范围、会话认证的本地持久化凭据保护，以及不可信来源能否代替真人提交消息、审批或修改权限配置。DSH 沙箱主要限制文件修改，不提供通用网络隔离；本插件的请求校验不能替代宿主控制面隔离。针对 `0.2.0-rc.2` 的社区控制面越权报告须按实际安装版本验证，当前部署是否受影响为 NOT_VERIFIED，不能从插件测试推断。若无法确认隔离，不在含真实凭据的环境开启无人值守审批。
+
+### P1 子集：GitHub Actions Linux + ACP 宿主集成（`dsh-integration`）
+
+`.github/workflows/test.yml` 新增一个 `dsh-integration` job（ubuntu-24.04、Node 24、15 分钟超时），原 Node 22/24 单元测试 job 不变。入口为 `scripts/ci-dsh-integration.mjs`，只用 Node 标准库；YAML 解析借用已安装 DSH 自带的 js-yaml，不新增项目依赖，不改插件运行时代码。本节不进入 P2 真实模型评估或 P3 实际批准。
+
+**固定宿主与配置。** `npm install @deepseek-ai/dsh@0.2.0-rc.2`（当时 npm `latest`），记录 cordis 及 dsh-acp、dsh-user-approval、dsh-permission-presets、dsh-sandbox-local、dsh-tool-bash、dsh-tool-fs、dsh-llm-pi-ai 的实际版本；不跟随 `latest`。插件通过宿主自己的 `dsh plugin --profile acp add link:<checkout>`（pnpm 10.28.0）安装，记录 `GITHUB_SHA`、checkout HEAD、是否有未提交修改及运行时 `sourceSha256`（与上文同一定义）。每次运行在 `$RUNNER_TEMP` 下新建 `DSH_HOME`、工作区和"外部"目录；脚本拒绝位于 `/tmp` 或 `os.tmpdir()` 内的根目录，因为 workspace-write 允许写这些位置。用户 patch 层设置并经 `--dump-config` 核对：插件仅组合一次、`presetName: sandboxed-auto`、`shadowMode: true`、`sessionMemory: false`、`permission.defaultPreset: sandboxed-auto`、`sandboxed-auto` 为 `workspace-write` + `ask`、`approval.policy: ask`、`sandbox-policy.mode: workspace-write`；会话日志另须出现 `permission/preset=sandboxed-auto` 与 `approval/policy=ask`。`never` 策略下宿主在插件之前直接拒绝，不计为验收。
+
+实施中发现：用户 patch 的 `config` 会**整体替换**已组合条目的配置而非合并。只写 `permission.defaultPreset` 时 bundle 的预设表被丢弃，`permission` 条目以 `unknown preset "sandboxed-auto"` 未激活，此时插件找不到预设而全部透传。脚本因此先读取不含用户层的组合配置，再整条重述并只改目标键，并断言 stderr 无 "did not activate"。为读取原生审批事件，测试 profile 把会话日志设为 `compression: none`。
+
+**只替代模型响应。** 本地 OpenAI 兼容端点（`ci-mock` / `ci-mock-model`，经 dsh-llm-pi-ai 的 `openai-completions` 路由）按用例返回固定工具调用；系统提示为插件分类提示的请求返回固定分类 JSON。会话、模型适配器、工具执行器、沙箱、审批服务和插件加载器均为真实宿主；脚本只通过 ACP 标准方法（initialize、session/new、session/prompt、session/cancel、session/close、session/request_permission）交互，不直接调用插件 handler，不向宿主注入事件。结论限定为"真实宿主集成通过，模型响应受控"，不是模型准确率证据。
+
+| 用例 | 断言 |
+| --- | --- |
+| 加载与配置 | 上述有效配置；ACP 协议 v1；全部条目激活 |
+| 沙箱探测 | 模型可见的 bash/write/edit 均带 `sandbox_permissions`；工作区内 `touch` 成功；工作区和临时区之外的 `touch` 被拒，工具结果为 `[sandbox: file access denied under workspace-write mode]` 而非 `SANDBOX_UNAVAILABLE`；无审批请求 |
+| 低风险 bash 显式升级 | 分类请求恰好一次，`toolArguments` 与脚本调用逐字一致，分类返回 low/approve/routine；仍恰有一个 `approval/asked`，callId 唯一绑定参数一致的 `tool/call`，理由为原生升级理由；ACP 客户端收到同一 callId 的权限请求并拒绝；`approval/decided=rejected`；目标文件不存在 |
+| write / edit 升级 | 真实文件工具进入同样的审批链（edit 先 read）；分类器返回 ask；拒绝后 write 目标不存在、edit 目标内容不变 |
+| 审批期间取消 | 收到权限请求后发送 `session/cancel` 并以 `cancelled` 回复；prompt `stopReason=cancelled`；`approval/decided=cancelled`；目标不存在；关闭 stdin 后进程在 20 秒内退出，退出后目标仍不存在 |
+| 禁用插件后重启 | `--dump-config` 显示条目 disabled；分类请求为零；原生审批仍到达客户端并可拒绝；目标不存在 |
+
+任何断言失败、超时、沙箱不可用、未进入审批或分类路径未运行都使 job 失败，不跳过。Shadow 候选的观察方式：插件日志只进入宿主内存 logger，ACP 也没有 `/auto-report` 所需的命令适配器，因此以"分类器返回 approve 但审批仍以原生请求到达客户端"作为候选证据，不向宿主注入观察代码。
+
+**证据。** job 无论成败都上传 artifact `dsh-integration-evidence`（保留 30 天）：`versions.json`、组合前后的 `--dump-config` 与摘要、实际写入的用户 patch、`plugin-install.log`、ACP 双向记录、原生 `tool/call` / `approval/*` / `permission/*` 事件、`plugin-candidates.json`（分类请求及固定裁决）、`model-requests.json`、dsh stderr 和 `assertions.json`。
+
+**本地预跑（2026-10-09，Linux x64，Node 22.22.0，DSH 0.2.0-rc.2，插件 0.7.1，sourceSha256 `4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`）：** 57/57 断言通过，约 25 秒；沙箱在该环境实际生效。另做一次未提交的负对照：把 `shadowMode` 改为 `false` 时 bash 与取消用例共 9 项断言失败（未发出客户端请求、`allowed-once`、目标被创建），证明断言能发现自动授予。负对照只在可丢弃目录执行 `touch`，不作为 P3 验收。Node 24 与 GitHub runner 结果以 PR CI 的 `dsh-integration` job 为准。
+
+| 门槛 | 状态 |
+| --- | --- |
+| GitHub Actions Linux + ACP 的已覆盖宿主集成项 | 待 PR CI `dsh-integration` 通过后标为 PASS |
+| Web / Desktop / TUI 界面 | NOT_VERIFIED |
+| 实际部署控制面隔离 | NOT_VERIFIED |
+| 真人授权来源 | NOT_VERIFIED；ACP 客户端为脚本，不代表真人 |
+| 真实模型效果 | NOT_VERIFIED（P2） |
+| 实际自动批准 | NOT_VERIFIED（P3）；Shadow 始终开启 |
+
+回滚：删除 `dsh-integration` job 和 `scripts/ci-dsh-integration.mjs` 即可。PR #1 仍暂不合并。
 
 ### P2：真实模型影子评估
 
