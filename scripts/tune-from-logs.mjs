@@ -3,14 +3,14 @@
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_DANGER_PATTERNS } from '../danger-patterns.js'
+import { DEFAULT_DANGER_PATTERNS, inspectCommand } from '../danger-patterns.js'
 
 export const REPORT_NOTICE = Object.freeze([
   '说明：approval 审计事件不记录批准者身份，无法区分自动批准或人工批准；以下所有建议都是启发式候选。',
   '信号来源：内置危险清单命中、批准后用户中止、真人消息中的回滚关键词等。',
 ])
 
-export const USAGE = '用法: node scripts/tune-from-logs.mjs [--extra-danger-pattern <regex>]... <session.jsonl> [session.jsonl ...]'
+export const USAGE = '用法: node scripts/tune-from-logs.mjs [--extra-danger-pattern <regex>]... <session.jsonl> [session.jsonl ...]\n离线回放: node scripts/tune-from-logs.mjs --evaluate [--baseline | --shadow]'
 
 const APPROVAL_OUTCOMES = new Set([
   'allowed-once',
@@ -231,7 +231,8 @@ function messageText(message, sourceName, lineNumber) {
 
 function targetSandboxMode(reason) {
   const match = /^escalate sandbox to\s+([^:]+):/i.exec(reason)
-  return match?.[1].trim() || 'unknown'
+  const mode = match?.[1].trim()
+  return ['workspace-write', 'danger-full-access'].includes(mode) ? mode : 'unknown'
 }
 
 function commandFromArguments(argumentsText) {
@@ -240,9 +241,9 @@ function commandFromArguments(argumentsText) {
     const value = JSON.parse(argumentsText)
     if (isRecord(value) && typeof value.command === 'string') return value.command
   } catch {
-    // Match the runtime: malformed raw arguments remain evidence.
+    // Malformed arguments are missing evidence, never an executable command.
   }
-  return argumentsText
+  return undefined
 }
 
 function commandFamily(command) {
@@ -252,11 +253,14 @@ function commandFamily(command) {
     words.shift()
   }
   const executable = (words[0] ?? 'unknown').split(/[\\/]/).at(-1).toLowerCase()
+  const known = new Set(['npm', 'pnpm', 'yarn', 'git', 'pip', 'pip3', 'cargo', 'go', 'docker', 'kubectl', 'terraform', 'pulumi', 'brew', 'echo', 'printf', 'curl', 'wget', 'rm', 'dd', 'mkfs', 'chmod', 'chown', 'cat', 'ls', 'head', 'tail', 'find', 'rg', 'grep', 'node', 'python', 'python3', 'bash', 'sh', 'sudo', 'psql', 'mysql', 'sqlite3', 'shutdown', 'reboot', 'halt'])
+  if (!known.has(executable) && !/^mkfs\./.test(executable)) return 'unknown'
   const withSubcommand = new Set([
     'npm', 'pnpm', 'yarn', 'git', 'pip', 'pip3', 'cargo', 'go', 'docker',
     'kubectl', 'terraform', 'pulumi', 'brew',
   ])
-  return withSubcommand.has(executable) && words[1] !== undefined
+  const subcommands = new Set(['install', 'i', 'ci', 'add', 'update', 'publish', 'view', 'run', 'test', 'build', 'push', 'pull', 'status', 'diff', 'log', 'show', 'fetch', 'branch', 'clone', 'checkout', 'switch', 'destroy', 'plan', 'apply', 'get', 'delete', 'ps', 'system', 'exec', 'version'])
+  return withSubcommand.has(executable) && subcommands.has(words[1]?.toLowerCase())
     ? `${executable} ${words[1].toLowerCase()}`
     : executable
 }
@@ -438,14 +442,23 @@ export function parseSessionJsonl(content, sourceName = '<session.jsonl>') {
     approval.command = commandFromArguments(rawArguments)
     approval.commandFamily = commandFamily(approval.command)
     approval.targetSandboxMode = targetSandboxMode(approval.asked.data.reason ?? '')
-    approval.evidence = `${approval.asked.data.reason ?? ''}\n${rawArguments ?? ''}`
+    approval.evidence = approval.command ?? ''
+    approval.action = approval.command === undefined ? undefined : inspectCommand(approval.command, { workdir: header.cwd })
     approval.owned = approval.asked.seq >= (header.seedLength ?? 0)
   }
+
+  const guardCandidates = [...calls.values()].filter(call => call.seq >= (header.seedLength ?? 0)
+    && call.data.name === 'bash' && inspectCommand(commandFromArguments(call.data.arguments), { workdir: header.cwd }).handoffReason !== undefined)
+  const coverage = Object.freeze({
+    guardCandidateToolCalls: guardCandidates.length,
+    withoutApprovalRequest: guardCandidates.filter(call => !approvals.some(approval => approval.asked.data.callId === call.data.callId)).length,
+  })
 
   return Object.freeze({
     sourceName,
     header,
     eventCount: expectedSeq,
+    coverage,
     approvals: Object.freeze(approvals),
     turns,
     humanMessages: Object.freeze(humanMessages),
@@ -529,7 +542,7 @@ export function analyzeSessions(sessions, customPatterns = []) {
 
   const builtinHits = []
   for (const entry of ownedApprovals) {
-    const match = BUILTIN_PATTERNS.find(pattern => pattern.regexp.test(entry.approval.evidence))
+    const match = entry.approval.action?.handoffReason === undefined ? undefined : BUILTIN_PATTERNS.find(pattern => pattern.regexp.test(entry.approval.evidence))
     if (match !== undefined) builtinHits.push({ ...entry, pattern: match.source })
   }
 
@@ -611,6 +624,10 @@ export function analyzeSessions(sessions, customPatterns = []) {
     reviewCandidates: Object.freeze(reviewCandidates),
     patternCritiques: Object.freeze(patternCritiques),
     warnings: Object.freeze(sessions.flatMap(session => session.warnings)),
+    coverage: Object.freeze({
+      guardCandidateToolCalls: sessions.reduce((sum, session) => sum + (session.coverage?.guardCandidateToolCalls ?? 0), 0),
+      withoutApprovalRequest: sessions.reduce((sum, session) => sum + (session.coverage?.withoutApprovalRequest ?? 0), 0),
+    }),
   })
 }
 
@@ -629,6 +646,7 @@ export function renderReport(analysis) {
     `- 审批：asked=${analysis.approvalCount}，decided=${analysis.completedCount}，未决=${analysis.unresolvedCount}`,
     `- 结果：allowed-once=${analysis.outcomes['allowed-once']}，rejected=${analysis.outcomes.rejected}，cancelled=${analysis.outcomes.cancelled}，unavailable=${analysis.outcomes.unavailable}`,
     `- 继承前缀审批（未重复计入）：${analysis.inheritedApprovalCount}`,
+    `- 覆盖范围提示（有限行动规则、独立于审批分母）：工具调用候选=${analysis.coverage.guardCandidateToolCalls}，未进入 approval/request=${analysis.coverage.withoutApprovalRequest}`,
     '',
     '内置危险清单命中',
   ]
@@ -755,6 +773,13 @@ export async function runCli(argv, io = {}) {
   const stderr = io.stderr ?? process.stderr
   const read = io.readFile ?? readFile
   try {
+    if (argv[0] === '--evaluate') {
+      if (argv.slice(1).some(arg => !['--baseline', '--shadow'].includes(arg))) throw new Error('Unknown evaluation option')
+      if (argv.includes('--baseline') && argv.includes('--shadow')) throw new Error('--baseline and --shadow are separate evaluations')
+      const { runEvaluation } = await import('./approval-evaluation.mjs')
+      stdout.write(`${JSON.stringify(await runEvaluation({ baseline: argv.includes('--baseline'), shadow: argv.includes('--shadow') }), null, 2)}\n`)
+      return 0
+    }
     const args = parseCliArgs(argv)
     if (args.help) {
       stdout.write(`${USAGE}\n`)
