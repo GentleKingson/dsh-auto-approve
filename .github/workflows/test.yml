@@ -20,15 +20,20 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # Real-host integration on a pinned DSH release over ACP. Model responses come
+  # Real-host integration on pinned DSH releases over ACP. Model responses come
   # from a local scripted endpoint; see docs/ACCEPTANCE.md for scope.
   dsh-integration:
+    name: dsh-integration (${{ matrix.dsh-version }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh-version: [0.1.7-rc.2, 0.2.0-rc.2]
     env:
-      DSH_VERSION: 0.2.0-rc.2
+      DSH_VERSION: ${{ matrix.dsh-version }}
       PNPM_VERSION: 10.28.0
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +58,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-integration-evidence
+          name: dsh-integration-evidence-${{ matrix.dsh-version }}
           path: ${{ runner.temp }}/dsh-integration-evidence
           if-no-files-found: error
           retention-days: 30
