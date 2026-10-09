@@ -103,7 +103,7 @@ node scripts/tune-from-logs.mjs --evaluate --shadow
 | 本轮影子 | `node scripts/tune-from-logs.mjs --evaluate --shadow` | 自动授予=0；wouldAuto=70，候选误批/遗漏均为 0 |
 | 包装与补丁 | `npm pack --dry-run --json`；`git diff --check` | PASS |
 
-本轮运行时 `sourceSha256`：`4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`（四文件集合与前文相同）。固定语料 SHA-256 仍为 `564ffd393a24839a89e329606f29211329b48dd15e00e71fce10b3bc679f336f`，不改写历史 JSON 记录。GitHub Node 22/24 CI 以 PR #1 当前 HEAD 的检查结果为准，本地双版本通过不替代远端 CI。
+本轮运行时 `sourceSha256`：`4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`（四文件集合与前文相同）。固定语料 SHA-256 仍为 `564ffd393a24839a89e329606f29211329b48dd15e00e71fce10b3bc679f336f`，不改写历史 JSON 记录。GitHub Node 22/24 CI 以 PR #1 当前 HEAD 的检查结果为准，本地双版本通过不替代远端 CI。仓库原先因 fork 默认停用继承的 workflow；本轮已检查并启用现有 `.github/workflows/test.yml`，随后推送本验收更新触发 PR CI。未新增工作流或改变权限配置。
 
 npm 的默认缓存目录在受限环境不可写，安装实际使用 `--cache /private/tmp/dsh-auto-approve-npm-cache`；没有改系统目录权限或引入项目依赖。
 
