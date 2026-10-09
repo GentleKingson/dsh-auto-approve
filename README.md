@@ -84,7 +84,7 @@ dsh 0.1.7 起随安装附带一个**实验性**的官方权限档 **Auto review*
 | --- | --- | --- |
 | **Web**（`dsh web`） | ✅ 完整支持 | 审批对话框、图标兼容层、`/permission` 切换全部可用 |
 | **官方桌面端**（DeepSeek Harness Desktop，[`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)） | ✅ 支持 | 官方 Electron 壳内嵌完整 Web 应用，宿主侧与 Web 完全相同。插件需在应用内「插件」页安装，见[官方桌面端](#官方桌面端)。权限菜单里的图标需 0.7.1+ |
-| **TUI**（[ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)） | ✅ 支持 | 例行升级由分类器自动批；危险/拿不准时进入 TUI 的 Claude Code 风格审批面板（仅 `allowed-once` / `rejected`）。注意：TUI 未接入 `/permission` 预设切换，需在该 profile 的 settings 中设置 `permission.defaultPreset: sandboxed-auto` 才能进入本插件的档位；图标兼容层为 Web DOM 专属，TUI 中不生效（纯视觉） |
+| **TUI**（[ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)） | ✅ 支持 | 例行升级由分类器自动批；危险/拿不准时进入 TUI 的 Claude Code 风格审批面板（仅 `allowed-once` / `rejected`）。注意：TUI 未接入 `/permission` 预设切换，需把该 profile 的默认档设为 `sandboxed-auto` 才能进入本插件的档位（手写 `cordis.patch.yml` 时必须带上完整预设表，见[常见问题](#默认档补丁)）；图标兼容层为 Web DOM 专属，TUI 中不生效（纯视觉） |
 | **社区桌面壳**（[xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop)、[bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop) 等） | ✅ 支持 | 包裹官方 Web UI 的原生窗口，可复用本机 `127.0.0.1:3080` 实例，与 Web 体验一致；按 Web 的方式安装 |
 
 ## 安装
@@ -145,7 +145,7 @@ dsh plugin --profile web remove dsh-auto-approve
 升级 dsh 到 0.1.7 或更高版本**之前**，按顺序完成：
 
 1. 升级插件：`dsh plugin --profile web add dsh-auto-approve@0.7.1`（请写明版本号，`@latest` 可能被 pnpm 缓存的元数据解析到旧版）；
-2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；
+2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；dsh 0.2.0 起该文件会在首次启动时导入 profile 的 `cordis.patch.yml` 并改名为 `settings.yaml.imported`，此时改 patch 中 `permission` 条目的 `defaultPreset`；
 3. 若在 profile 的 `cordis.patch.yml` 里覆盖过本插件配置并写了 `presetName: auto`，同样改为 `sandboxed-auto`；
 4. 再升级 dsh 并重启。
 
@@ -315,6 +315,33 @@ dsh **0.1.7** 起还有一处不兼容无法靠特性探测化解：`auto` 成�
 - id: auto-approve
   disabled: true
 ```
+
+<a id="默认档补丁"></a>
+**怎么把 `sandboxed-auto` 设为新会话的默认档？**
+优先在 Settings 中修改默认权限档：宿主会把完整的 `permission` 配置连同 `defaultPreset` 一起写入 profile 的 `cordis.patch.yml`。手写该文件时注意，用户层补丁的 `config` 会**整体替换**该条目已组合的配置，而不是合并。只写 `defaultPreset` 会丢掉本插件注入的预设表：启动时提示 `1 entry did not activate` 和 `unknown preset "sandboxed-auto"`，权限预设不可用，本插件不再应答任何审批（全部转原生人工审批）。因此须连同完整预设表一起写：
+
+```yaml
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      sandboxed-auto:
+        sandbox: workspace-write
+        approval: ask
+        name: Sandboxed Auto
+        description: 保留工作区沙箱；例行升级由分类器一次性批准，危险或不确定时询问。Keeps the workspace sandbox; routine escalations are approved once by a classifier, dangerous or uncertain ones ask.
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: sandboxed-auto
+```
+
+改完用 `dsh --profile <name> --dump-config` 确认 `permission` 条目同时含预设表和 `defaultPreset`。这份重述的预设表不会自动继承本插件或 `dsh-base` 之后的预设变化，升级后请对照 `cordis.patch.yml` 重新核对。
 
 **怎么修改分类模型等配置？**
 分类模型默认跟随 Settings → Models。需要单独配置时只覆盖所需字段，再重启宿主：

@@ -85,7 +85,7 @@ The host-side plugin depends only on dsh's `approval/request` waterfall and the 
 | --- | --- | --- |
 | **Web** (`dsh web`) | ✅ Full | Approval dialogs, the icon shim, and `/permission` switching all work |
 | **Official Desktop** (DeepSeek Harness Desktop, [`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)) | ✅ Supported | The official Electron shell embeds the full Web app, so the host side is identical to Web. Install the plugin from the in-app **Plugins** page; see [Official Desktop](#official-desktop). The permission-menu icon needs 0.7.1+ |
-| **TUI** ([ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)) | ✅ Supported | Routine escalations are auto-approved by the classifier; dangerous or uncertain requests enter the TUI's Claude Code-style approval panel (`allowed-once`/`rejected` only). The TUI does not wire `/permission` preset switching — set `permission.defaultPreset: sandboxed-auto` in that profile's settings to enter this plugin's preset. The icon shim is Web-DOM only and does not apply in the TUI (cosmetic) |
+| **TUI** ([ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI)) | ✅ Supported | Routine escalations are auto-approved by the classifier; dangerous or uncertain requests enter the TUI's Claude Code-style approval panel (`allowed-once`/`rejected` only). The TUI does not wire `/permission` preset switching — make `sandboxed-auto` that profile's default preset to enter this plugin's preset (a hand-written `cordis.patch.yml` must restate the full preset table; see the [FAQ](#default-preset-patch)). The icon shim is Web-DOM only and does not apply in the TUI (cosmetic) |
 | **Community desktop shells** ([xiincs/deepseek-harness-desktop](https://github.com/xiincs/deepseek-harness-desktop), [bruc3van/dsh-desktop](https://github.com/bruc3van/dsh-desktop), et al.) | ✅ Supported | Native windows over the official Web UI that can reuse a running instance on `127.0.0.1:3080`, identical to Web; install as for Web |
 
 ## Install
@@ -146,7 +146,7 @@ Uninstall from the same **Plugins** page. If the plugin keeps Desktop from start
 **Before** upgrading dsh to 0.1.7 or later, in order:
 
 1. Upgrade the plugin: `dsh plugin --profile web add dsh-auto-approve@0.7.1` (pin the version; `@latest` can resolve to an older release through pnpm's cached metadata);
-2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`);
+2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`); from dsh 0.2.0 that file is imported into the profile's `cordis.patch.yml` on first start and renamed `settings.yaml.imported`, so change `defaultPreset` in the patch's `permission` entry instead;
 3. If a profile `cordis.patch.yml` overrides this plugin's config with `presetName: auto`, change that to `sandboxed-auto` as well;
 4. Then upgrade dsh and restart.
 
@@ -316,6 +316,33 @@ Append the following to your profile's user patch layer at `$DSH_HOME/profiles/w
 - id: auto-approve
   disabled: true
 ```
+
+<a id="default-preset-patch"></a>
+**How do I make `sandboxed-auto` the default preset for new sessions?**
+Prefer changing the default permission preset in Settings: the host writes the complete `permission` config together with `defaultPreset` into the profile's `cordis.patch.yml`. If you edit that file by hand, note that a user-layer patch's `config` **replaces** the entry's composed config instead of merging into it. Writing only `defaultPreset` drops the preset table this plugin injects: startup reports `1 entry did not activate` and `unknown preset "sandboxed-auto"`, permission presets are unavailable, and this plugin answers no approvals (all fall through to native human review). Restate the full table:
+
+```yaml
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      sandboxed-auto:
+        sandbox: workspace-write
+        approval: ask
+        name: Sandboxed Auto
+        description: 保留工作区沙箱；例行升级由分类器一次性批准，危险或不确定时询问。Keeps the workspace sandbox; routine escalations are approved once by a classifier, dangerous or uncertain ones ask.
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: sandboxed-auto
+```
+
+Then confirm with `dsh --profile <name> --dump-config` that the `permission` entry contains both the preset table and `defaultPreset`. The restated table does not inherit later preset changes from this plugin or `dsh-base`; recheck it against `cordis.patch.yml` after upgrading.
 
 **How do I change the classifier model or other settings?**
 The classifier follows Settings → Models. Override only the required fields, then restart the host:
