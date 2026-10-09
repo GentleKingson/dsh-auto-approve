@@ -157,6 +157,8 @@ Web 还须检查控制面与 Agent 的信任隔离，包括部署监听与访问
 
 **PR CI（2026-10-09）：** [run 37952753175](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/37952753175) 的 `dsh-integration` job 在 ubuntu-24.04、Node v24.21.0、DSH 0.2.0-rc.2 下 57/57 通过（脚本约 5 秒，含安装约 80 秒），证据 artifact `dsh-integration-evidence`（14 个文件）已上传；同次 Node 22/24 单元测试 job 通过。被测为 PR head `a49cb00e91f5f78fbd233f3fd609ebcecbc8100b`，实际 checkout 为测试合并提交 `96182edc7c5f759ee4ee29f7e22c8d1d35d4d31d`。该次运行把合并提交写进了 `versions.json` 的 `commit` 字段；之后改为分别记录 `prHead`、`checkoutHead` 与 `githubSha`。
 
+**DSH 0.1.7-rc.2 本地复跑（2026-10-09，Linux x64，Node 22.22.0，插件 0.7.1 @ `53ee7a38760eef0337b6b9b7e75b820e8e1d10ba`，sourceSha256 不变）：** 未修改脚本，仅把 `--dsh` 指向 `@deepseek-ai/dsh@0.1.7-rc.2`（cordis 4.0.4，其余宿主包均为 0.1.7-rc.2），6 个用例 57/57 通过。该版本会话日志默认也是 zstd，ACP 方法、审批事件结构、沙箱拒绝文案与 0.2.0-rc.2 一致。README 默认档说明也在该版本复核：只写 `defaultPreset` 的补丁同样导致 `unknown preset "sandboxed-auto"`；README 完整片段无告警并使新会话记录 `sandboxed-auto`；`$DSH_HOME/settings.yaml` 同样会被一次性导入 profile 补丁。两个版本的导入都在启动后异步完成，启动后立即新建的首个会话可能落在 `workspace-write`，稍后或重启后的会话为 `sandboxed-auto`。CI 仍只固定 0.2.0-rc.2；0.1.7-rc.2 结果仅为本地记录，不是 CI 证据。
+
 | 门槛 | 状态 |
 | --- | --- |
 | GitHub Actions Linux + ACP 的已覆盖宿主集成项 | PASS（上表用例；模型响应受控，非真实模型证据） |

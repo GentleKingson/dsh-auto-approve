@@ -146,7 +146,7 @@ Uninstall from the same **Plugins** page. If the plugin keeps Desktop from start
 **Before** upgrading dsh to 0.1.7 or later, in order:
 
 1. Upgrade the plugin: `dsh plugin --profile web add dsh-auto-approve@0.7.1` (pin the version; `@latest` can resolve to an older release through pnpm's cached metadata);
-2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`); from dsh 0.2.0 that file is imported into the profile's `cordis.patch.yml` on first start and renamed `settings.yaml.imported`, so change `defaultPreset` in the patch's `permission` entry instead;
+2. If `$DSH_HOME/settings.yaml` sets `permission.defaultPreset: auto`, change it to `sandboxed-auto` (or `workspace-write`); newer dsh releases (confirmed on 0.1.7-rc.2 and 0.2.0-rc.2) import that file once into the profile's `cordis.patch.yml` after startup and rename it `settings.yaml.imported`, so change `defaultPreset` in the patch's `permission` entry instead;
 3. If a profile `cordis.patch.yml` overrides this plugin's config with `presetName: auto`, change that to `sandboxed-auto` as well;
 4. Then upgrade dsh and restart.
 

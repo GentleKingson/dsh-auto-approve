@@ -145,7 +145,7 @@ dsh plugin --profile web remove dsh-auto-approve
 升级 dsh 到 0.1.7 或更高版本**之前**，按顺序完成：
 
 1. 升级插件：`dsh plugin --profile web add dsh-auto-approve@0.7.1`（请写明版本号，`@latest` 可能被 pnpm 缓存的元数据解析到旧版）；
-2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；dsh 0.2.0 起该文件会在首次启动时导入 profile 的 `cordis.patch.yml` 并改名为 `settings.yaml.imported`，此时改 patch 中 `permission` 条目的 `defaultPreset`；
+2. 若 `$DSH_HOME/settings.yaml` 里设置了 `permission.defaultPreset: auto`，改为 `sandboxed-auto`（或 `workspace-write`）；较新的 dsh（已在 0.1.7-rc.2 与 0.2.0-rc.2 确认）会在启动后把该文件一次性导入 profile 的 `cordis.patch.yml` 并改名为 `settings.yaml.imported`，此时改 patch 中 `permission` 条目的 `defaultPreset`；
 3. 若在 profile 的 `cordis.patch.yml` 里覆盖过本插件配置并写了 `presetName: auto`，同样改为 `sandboxed-auto`；
 4. 再升级 dsh 并重启。
 
