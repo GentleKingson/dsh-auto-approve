@@ -64,6 +64,35 @@ function userMessage(seq, text, source = { kind: 'user' }) {
   }, { surfaceOp: 'append' })
 }
 
+test('decoded action signals ignore literal output and report unreviewed coverage separately', () => {
+  const log = parseSessionJsonl(jsonl([
+    header(),
+    event('turn/start', 0, { turn: 1 }),
+    event('permission/preset', 1, { preset: 'sandboxed-auto' }),
+    toolCall(2, 'quoted', "printf '%s\\n' 'DROP TABLE demo'"),
+    asked(3, 'approval-quoted', 'quoted'),
+    decided(4, 'approval-quoted'),
+    toolCall(5, 'encoded', 'rm -rf "/"'),
+    event('turn/end', 6, { turn: 1, reason: { kind: 'completed' } }),
+  ]))
+  const analysis = analyzeSessions([log])
+  assert.equal(analysis.builtinHits.length, 0, 'display text is not a destructive SQL action')
+  assert.equal(analysis.approvalCount, 1)
+  assert.deepEqual(analysis.coverage, { guardCandidateToolCalls: 1, withoutApprovalRequest: 1 })
+  assert.match(renderReport(analysis), /独立于审批分母/)
+})
+
+test('offline reports do not copy an unknown executable or justification as command metadata', () => {
+  const secret = 'SYNTHETIC_SECRET_DO_NOT_COPY'
+  const log = parseSessionJsonl(jsonl([
+    header(), event('turn/start', 0, { turn: 1 }),
+    toolCall(1, 'first', secret), asked(2, 'a', 'first', `escalate sandbox to danger-full-access: token=${secret}`), decided(3, 'a'),
+    toolCall(4, 'second', secret), asked(5, 'b', 'second'), decided(6, 'b'),
+    event('turn/end', 7, { turn: 1, reason: { kind: 'completed' } }),
+  ]))
+  assert.doesNotMatch(renderReport(analyzeSessions([log])), new RegExp(secret))
+})
+
 test('parses rc.6 packed chunk rows while keeping approval seq and callId correlation exact', () => {
   const content = jsonl([
     header(),
