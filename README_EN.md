@@ -17,7 +17,7 @@
 English | [中文](README.md)
 
 
-`dsh-auto-approve` adds a **Sandboxed Auto** permission preset (preset id `sandboxed-auto`) to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). In that preset **the workspace sandbox stays in place**, and routine sandbox escalations may be approved once by a classifier model; deterministic danger matches, uncertain model decisions, timeouts, malformed responses, and internal failures continue to the normal human approval dialog.
+`dsh-auto-approve` adds a **Sandboxed Auto** permission preset (preset id `sandboxed-auto`) to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). In that preset **`workspace-write` is the default sandbox**, and routine sandbox escalations may be approved once by a classifier model. An approved individual `bash/write/edit` escalation can bypass the sandbox for that execution. Deterministic danger matches, uncertain model decisions, timeouts, malformed responses, and internal failures continue to the normal human approval dialog.
 
 The bundle restates the permission preset table as four entries, in this order: `read-only`, `workspace-write`, `sandboxed-auto`, and `danger-full-access` — this plugin's preset is inserted between the stock presets, all of which are preserved. Outside the `sandboxed-auto` preset, the plugin delegates every approval request unchanged.
 
@@ -25,17 +25,19 @@ The bundle restates the permission preset table as four entries, in this order: 
 
 ## Positioning
 
-Sandboxed Auto is a lower-friction safety layer on top of `workspace-write`: it keeps the same sandbox boundary and sends routine escalations to the classifier, while danger-list matches, classifier uncertainty, and classification failures return to human approval.
+Sandboxed Auto uses `workspace-write` as the default sandbox and sends routine escalations to the classifier, while danger-list matches, classifier uncertainty, and classification failures return to human approval.
 
-Unlike comparable schemes that switch the sandbox off and run their own approval channel, this plugin **relaxes no sandbox boundary**: the classifier only decides whether to grant **one** escalation, file tools and other non-shell operations stay sandboxed, and approvals still land in dsh's native session audit events.
+The classifier decides whether to grant **one** escalation. An approved `bash/write/edit` call can bypass the workspace sandbox for that execution; file tools can request escalation too. `allowed-once` is not a path-level permission and does not authorize future calls, which must be decided independently under their current context. Approvals remain in dsh's native session audit events.
+
+The DSH sandbox primarily restricts file modifications and does not provide general network isolation. Host control-plane isolation must also be checked before enabling automatic approvals; see the [acceptance gates](./docs/ACCEPTANCE.md).
 
 Think of it as DeepSeek Harness's counterpart to [Claude Code's **auto mode**](https://code.claude.com/docs/en/permission-modes) and [Codex's **Auto-review mode**](https://developers.openai.com/codex/agent-approvals-security): routine approvals are handled automatically, while dangerous or uncertain actions go back to a human.
 
 | Preset | Sandbox scope | When it prompts | Best for |
 | --- | --- | --- | --- |
-| `read-only` | Read-only workspace; project files cannot be changed | Writing, network access, or another out-of-bounds action needs escalation | Code review, exploration, and sensitive repositories |
-| `workspace-write` | Workspace reads and writes are allowed; outside paths and restricted capabilities remain isolated | Network access, writes outside the workspace, or another sandbox escalation | Everyday development where a human reviews every escalation |
-| **`sandboxed-auto`** | **Same as `workspace-write`** | **Routine escalations are auto-approved; destructive-list matches, classifier uncertainty, or failures go to a human** | **Long-running tasks and dependency installs; fewer interruptions with a complete audit trail** |
+| `read-only` | Read-only by default; project files cannot be changed | Writing or another sandbox escalation | Code review, exploration, and sensitive repositories |
+| `workspace-write` | Workspace modifications are allowed by default; writes outside it require escalation | Writes outside the workspace or another sandbox escalation | Everyday development where a human reviews every escalation |
+| **`sandboxed-auto`** | **Same default as `workspace-write`; approved calls can bypass it once** | **Routine escalations are auto-approved; destructive-list matches, classifier uncertainty, or failures go to a human** | **Long-running tasks and dependency installs; fewer interruptions with a complete audit trail** |
 | `danger-full-access` | No workspace sandbox boundary; commands run with host permissions | No prompt (`approval: never`) | Isolated, disposable, fully trusted environments only |
 
 ## Compared with the official Auto review
@@ -44,7 +46,7 @@ From dsh 0.1.7 the install ships an **experimental** official preset, **Auto rev
 
 | | Official Auto review | Sandboxed Auto (this plugin) |
 | --- | --- | --- |
-| Sandbox | **None** (Full access) | **Keeps** the workspace-write sandbox |
+| Sandbox | **None** (Full access) | **Defaults to** workspace-write; approved calls can bypass it once |
 | What is reviewed | Every tool call | This preset’s sandbox escalation approval requests only; share not measured |
 | Review model | The current agent's model; not changeable | Configurable, including a cheaper model |
 | Deterministic floor | None | A danger list runs before the classifier and cannot be overridden |
@@ -55,7 +57,7 @@ From dsh 0.1.7 the install ships an **experimental** official preset, **Auto rev
 
 The official preset does things this plugin cannot: it reviews operations **inside** the workspace too, whereas this plugin never sees in-sandbox actions (such as deleting files in the project) because the sandbox already allows them; its review input is partitioned and deliberately excludes tool results against injection, with low/medium/high risk tiers that set authorization requirements; and it is maintained upstream, so it tracks dsh's interfaces.
 
-**Which to use**: choose the official Auto review for maximum autonomy if you accept running without a sandbox and a per-call token cost; choose Sandboxed Auto to keep the sandbox as a hard boundary and let the model handle only boundary-crossing requests. The preset ids differ, so both can be installed and picked separately in the selector — this plugin acts only under `sandboxed-auto`, and when the official `auto` is selected it passes every approval request through unchanged, never answering an ask the official reviewer meant for you.
+**Which to use**: choose the official Auto review for maximum autonomy if you accept running without a sandbox and a per-call token cost; choose Sandboxed Auto to use `workspace-write` by default and let the model handle individual escalation requests. The preset ids differ, so both can be installed and picked separately in the selector — this plugin acts only under `sandboxed-auto`, and when the official `auto` is selected it passes every approval request through unchanged, never answering an ask the official reviewer meant for you.
 
 ## How it works
 
@@ -267,7 +269,7 @@ Genuine user restrictions, including earlier messages, reach the classifier inta
 
 ### What one automatic grant actually gives
 
-A dsh sandbox escalation has no path granularity: the only target a model can request is `danger-full-access`. Every automatic grant therefore means **that one command runs unconfined by the workspace sandbox**, not that the single directory it mentioned was opened. The grant is one-shot (`allowed-once`) and does not carry to the next command, but for the duration of that command there is no workspace confinement.
+A dsh sandbox escalation has no path granularity: the only target a model can request is `danger-full-access`. An approved individual `bash/write/edit` escalation can bypass the workspace sandbox for that execution and run with host permissions. `allowed-once` is not a path-level permission and does not authorize future calls; subsequent calls must revalidate the current authorization context, including cache hits.
 
 ### The runtime self-modification path
 
