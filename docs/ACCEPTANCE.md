@@ -134,7 +134,7 @@ Web 还须检查控制面与 Agent 的信任隔离，包括部署监听与访问
 
 `.github/workflows/test.yml` 新增一个 `dsh-integration` job（ubuntu-24.04、Node 24、15 分钟超时），原 Node 22/24 单元测试 job 不变。入口为 `scripts/ci-dsh-integration.mjs`，只用 Node 标准库；YAML 解析借用已安装 DSH 自带的 js-yaml，不新增项目依赖，不改插件运行时代码。本节不进入 P2 真实模型评估或 P3 实际批准。
 
-**固定宿主与配置。** `npm install @deepseek-ai/dsh@0.2.0-rc.2`（当时 npm `latest`），记录 cordis 及 dsh-acp、dsh-user-approval、dsh-permission-presets、dsh-sandbox-local、dsh-tool-bash、dsh-tool-fs、dsh-llm-pi-ai 的实际版本；不跟随 `latest`。插件通过宿主自己的 `dsh plugin --profile acp add link:<checkout>`（pnpm 10.28.0）安装，记录 `GITHUB_SHA`、checkout HEAD、是否有未提交修改及运行时 `sourceSha256`（与上文同一定义）。每次运行在 `$RUNNER_TEMP` 下新建 `DSH_HOME`、工作区和"外部"目录；脚本拒绝位于 `/tmp` 或 `os.tmpdir()` 内的根目录，因为 workspace-write 允许写这些位置。用户 patch 层设置并经 `--dump-config` 核对：插件仅组合一次、`presetName: sandboxed-auto`、`shadowMode: true`、`sessionMemory: false`、`permission.defaultPreset: sandboxed-auto`、`sandboxed-auto` 为 `workspace-write` + `ask`、`approval.policy: ask`、`sandbox-policy.mode: workspace-write`；会话日志另须出现 `permission/preset=sandboxed-auto` 与 `approval/policy=ask`。`never` 策略下宿主在插件之前直接拒绝，不计为验收。
+**固定宿主与配置。** `npm install @deepseek-ai/dsh@0.2.0-rc.2`（当时 npm `latest`），记录 cordis 及 dsh-acp、dsh-user-approval、dsh-permission-presets、dsh-sandbox-local、dsh-tool-bash、dsh-tool-fs、dsh-llm-pi-ai 的实际版本；不跟随 `latest`。插件通过宿主自己的 `dsh plugin --profile acp add link:<checkout>`（pnpm 10.28.0）安装，记录 PR head SHA、实际 checkout HEAD（pull_request 事件下为 GitHub 生成的测试合并提交，即 `GITHUB_SHA`）、是否有未提交修改及运行时 `sourceSha256`（与上文同一定义）。每次运行在 `$RUNNER_TEMP` 下新建 `DSH_HOME`、工作区和"外部"目录；脚本拒绝位于 `/tmp` 或 `os.tmpdir()` 内的根目录，因为 workspace-write 允许写这些位置。用户 patch 层设置并经 `--dump-config` 核对：插件仅组合一次、`presetName: sandboxed-auto`、`shadowMode: true`、`sessionMemory: false`、`permission.defaultPreset: sandboxed-auto`、`sandboxed-auto` 为 `workspace-write` + `ask`、`approval.policy: ask`、`sandbox-policy.mode: workspace-write`；会话日志另须出现 `permission/preset=sandboxed-auto` 与 `approval/policy=ask`。`never` 策略下宿主在插件之前直接拒绝，不计为验收。
 
 实施中发现：用户 patch 的 `config` 会**整体替换**已组合条目的配置而非合并。只写 `permission.defaultPreset` 时 bundle 的预设表被丢弃，`permission` 条目以 `unknown preset "sandboxed-auto"` 未激活，此时插件找不到预设而全部透传。脚本因此先读取不含用户层的组合配置，再整条重述并只改目标键，并断言 stderr 无 "did not activate"。为读取原生审批事件，测试 profile 把会话日志设为 `compression: none`。
 
@@ -153,11 +153,13 @@ Web 还须检查控制面与 Agent 的信任隔离，包括部署监听与访问
 
 **证据。** job 无论成败都上传 artifact `dsh-integration-evidence`（保留 30 天）：`versions.json`、组合前后的 `--dump-config` 与摘要、实际写入的用户 patch、`plugin-install.log`、ACP 双向记录、原生 `tool/call` / `approval/*` / `permission/*` 事件、`plugin-candidates.json`（分类请求及固定裁决）、`model-requests.json`、dsh stderr 和 `assertions.json`。
 
-**本地预跑（2026-10-09，Linux x64，Node 22.22.0，DSH 0.2.0-rc.2，插件 0.7.1，sourceSha256 `4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`）：** 57/57 断言通过，约 25 秒；沙箱在该环境实际生效。另做一次未提交的负对照：把 `shadowMode` 改为 `false` 时 bash 与取消用例共 9 项断言失败（未发出客户端请求、`allowed-once`、目标被创建），证明断言能发现自动授予。负对照只在可丢弃目录执行 `touch`，不作为 P3 验收。Node 24 与 GitHub runner 结果以 PR CI 的 `dsh-integration` job 为准。
+**本地预跑（2026-10-09，Linux x64，Node 22.22.0，DSH 0.2.0-rc.2，插件 0.7.1，sourceSha256 `4e9142cf5475f69030dedcf1550950f188d6adddbf37ac9116f974c25f4cddfa`）：** 57/57 断言通过，约 25 秒；沙箱在该环境实际生效。另做一次未提交的负对照：把 `shadowMode` 改为 `false` 时 bash 与取消用例共 9 项断言失败（未发出客户端请求、`allowed-once`、目标被创建），证明断言能发现自动授予。负对照只在可丢弃目录执行 `touch`，不作为 P3 验收。
+
+**PR CI（2026-10-09）：** [run 37952753175](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/37952753175) 的 `dsh-integration` job 在 ubuntu-24.04、Node v24.21.0、DSH 0.2.0-rc.2 下 57/57 通过（脚本约 5 秒，含安装约 80 秒），证据 artifact `dsh-integration-evidence`（14 个文件）已上传；同次 Node 22/24 单元测试 job 通过。被测为 PR head `a49cb00e91f5f78fbd233f3fd609ebcecbc8100b`，实际 checkout 为测试合并提交 `96182edc7c5f759ee4ee29f7e22c8d1d35d4d31d`。该次运行把合并提交写进了 `versions.json` 的 `commit` 字段；之后改为分别记录 `prHead`、`checkoutHead` 与 `githubSha`。
 
 | 门槛 | 状态 |
 | --- | --- |
-| GitHub Actions Linux + ACP 的已覆盖宿主集成项 | 待 PR CI `dsh-integration` 通过后标为 PASS |
+| GitHub Actions Linux + ACP 的已覆盖宿主集成项 | PASS（上表用例；模型响应受控，非真实模型证据） |
 | Web / Desktop / TUI 界面 | NOT_VERIFIED |
 | 实际部署控制面隔离 | NOT_VERIFIED |
 | 真人授权来源 | NOT_VERIFIED；ACP 客户端为脚本，不代表真人 |

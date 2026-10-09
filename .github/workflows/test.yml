@@ -43,6 +43,8 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
       - name: Run DSH ACP integration
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: >-
           node scripts/ci-dsh-integration.mjs
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"

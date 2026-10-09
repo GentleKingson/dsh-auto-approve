@@ -380,8 +380,10 @@ async function main() {
     hostPackages: Object.fromEntries(['@deepseek-ai/dsh-acp', '@deepseek-ai/dsh-user-approval', '@deepseek-ai/dsh-permission-presets', '@deepseek-ai/dsh-sandbox-local', '@deepseek-ai/dsh-tool-bash', '@deepseek-ai/dsh-tool-fs', '@deepseek-ai/dsh-llm-pi-ai', '@deepseek-ai/cordis'].map(name => [name, packageVersion(dshRequire, name)])),
     plugin: {
       version: JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8')).version,
-      commit: process.env.GITHUB_SHA ?? git(['rev-parse', 'HEAD']),
+      // On pull_request runs the checkout is the test merge commit (GITHUB_SHA); the PR head is recorded separately.
+      prHead: process.env.PR_HEAD_SHA || null,
       checkoutHead: git(['rev-parse', 'HEAD']),
+      githubSha: process.env.GITHUB_SHA ?? null,
       dirty: (git(['status', '--porcelain', '--untracked-files=no']) ?? '').length > 0,
       // Same definition as scripts/approval-evaluation.mjs and docs/ACCEPTANCE.md.
       sourceSha256: sha256(JSON.stringify(runtimeFiles.map(file => [file, readFileSync(join(PLUGIN_DIR, file), 'utf8')]))),
@@ -389,7 +391,7 @@ async function main() {
     model: { provider: MODEL_PROVIDER, model: MODEL_ID, note: 'scripted local endpoint; not a real model' },
   }
   writeEvidence('versions.json', versions)
-  console.log(`dsh ${versions.dsh}; plugin ${versions.plugin.version} @ ${versions.plugin.commit}; ${versions.node}`)
+  console.log(`dsh ${versions.dsh}; plugin ${versions.plugin.version} @ ${versions.plugin.prHead ?? versions.plugin.checkoutHead} (checkout ${versions.plugin.checkoutHead}); ${versions.node}`)
 
   const baseEnv = { ...process.env, DSH_HOME: dshHome, CI_MOCK_API_KEY: 'ci-mock-key', DSH_TELEMETRY_MODE: 'DISABLED', NO_COLOR: '1' }
   delete baseEnv.DSH_PERMISSION_MODE
