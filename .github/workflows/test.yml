@@ -41,20 +41,18 @@ jobs:
       # This is adapter coverage, not a claim of Windows DSH ACL integration.
       - run: node --test test/windows-approval.test.js test/compile-evidence.test.js test/public-approval.test.js
 
-  # Real-host integration on pinned DSH releases over ACP. Model responses come
-  # from a local scripted endpoint; see docs/ACCEPTANCE.md for scope.
+  # Real-host integration on the one supported DSH release over ACP. Model
+  # responses come from a local scripted endpoint; see docs/ACCEPTANCE.md for
+  # scope. The script asserts the host is exactly DSH_VERSION and matches the
+  # plugin's exact @deepseek-ai/dsh peer.
   dsh-integration:
-    name: dsh-integration (${{ matrix.dsh-version }})
+    name: dsh-integration (0.2.0-rc.2)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        dsh-version: [0.1.7-rc.2, 0.2.0-rc.2]
     env:
-      DSH_VERSION: ${{ matrix.dsh-version }}
+      DSH_VERSION: 0.2.0-rc.2
       PNPM_VERSION: 10.28.0
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-integration-evidence-${{ matrix.dsh-version }}
+          name: dsh-integration-evidence-${{ env.DSH_VERSION }}
           path: ${{ runner.temp }}/dsh-integration-evidence
           if-no-files-found: error
           retention-days: 30

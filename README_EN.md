@@ -77,6 +77,8 @@ Literal output also requires model approval or a revalidated low-risk model cach
 
 ## Compatibility
 
+**Supported DSH version: `0.2.0-rc.2` only.** `package.json` declares an exact `peerDependencies["@deepseek-ai/dsh"]: "0.2.0-rc.2"`. DSH 0.2.0-rc.2 uses it to refuse a mismatched plugin at install and at startup. Other versions (including `0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.1-alpha.*` and later) are no longer supported until they are re-accepted. See [Host version compatibility](#host-version-compatibility).
+
 The table describes interface support. This approval candidate has not been exercised in real Web, Desktop or TUI clients; all three rollout gates are NOT_VERIFIED.
 
 The host-side plugin depends only on dsh's `approval/request` waterfall and the `permissionPresets` service, so it is frontend-agnostic; frontends differ only in how the human fallback is rendered and in cosmetic layers such as the icon shim.
@@ -300,7 +302,23 @@ The Permissions selector in DeepSeek Harness does not expose an API for custom p
 
 ### Host version compatibility
 
-The plugin supports the session APIs from both before and after dsh 0.1.2, selecting the call form by runtime feature detection, while unverifiable required tool parameters safely delegate:
+**Only DSH `0.2.0-rc.2` is supported.** It passed two CI checks:
+- `dsh-integration`: the real host with scripted model responses, including one actual `allowed-once` automatic approval, the human fallback for a dangerous command, and refusal to install or start with a mismatched host version;
+- `DSH Live Approval`: the real host with the real OpenCode Go `deepseek-v4.1-flash` classifier, in shadow mode.
+
+See the [acceptance record](./docs/ACCEPTANCE.md).
+
+The version limit is enforced by DSH's own plugin compatibility check, not by runtime probing inside the plugin:
+
+| DSH version | This plugin release |
+| --- | --- |
+| `0.2.0-rc.2` | Supported |
+| `0.2.0-rc.1`, `0.2.1-alpha.1/2` and later | Not supported; hosts with the peer check refuse to install it and skip an installed copy at startup |
+| `0.1.7-rc.2` and earlier | Not supported; these hosts may not enforce the peer check and could still load the plugin, but they are outside acceptance |
+
+To try another version anyway, DSH offers an exact-version risk exemption: `dsh plugin allow-version dsh-auto-approve@<plugin version> --dsh-version <dsh version> --accept-risk`. An exempted combination is not accepted. `peerDependenciesMeta` marks the peer optional, so a plain `npm install` does not pull in a DSH host.
+
+The compatibility code below still ships, but it is no longer a support promise for older DSH releases. The plugin supports the session APIs from both before and after dsh 0.1.2, selecting the call form by runtime feature detection, while unverifiable required tool parameters safely delegate:
 
 | Interface | Before 0.1.2 | From 0.1.2 |
 | --- | --- | --- |

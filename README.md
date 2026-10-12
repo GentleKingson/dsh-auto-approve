@@ -76,6 +76,8 @@ dsh 0.1.7 起随安装附带一个**实验性**的官方权限档 **Auto review*
 
 ## 适用性矩阵
 
+**支持的 DSH 版本：仅 `0.2.0-rc.2`。** `package.json` 以精确的 `peerDependencies["@deepseek-ai/dsh"]: "0.2.0-rc.2"` 声明这一点，DSH 0.2.0-rc.2 会据此在安装和启动时拒绝版本不匹配的插件；其他版本（含 `0.1.7-rc.2`、`0.2.0-rc.1`、`0.2.1-alpha.*` 及后续版本）不再承诺支持，需重新验收后才会放开。详见[宿主版本兼容](#宿主版本兼容)。
+
 下表说明接口适配范围；本次审批改造尚未在真实 Web、Desktop、TUI 上验收，状态均为 `NOT_VERIFIED`，不能据此推断本候选版本已通过。
 
 插件宿主侧只依赖 dsh 的 `approval/request` 瀑布流与 `permissionPresets` 服务，与前端形态无关；不同前端只在「人工兜底如何呈现」和图标等视觉层上有差异。
@@ -298,7 +300,23 @@ DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API�
 
 ### 宿主版本兼容
 
-插件同时兼容 dsh 0.1.2 之前与之后的会话接口，按运行时特性探测选择调用方式，无需按 dsh 版本安装不同版本：
+**当前仅支持 DSH `0.2.0-rc.2`。** 该版本已通过两项 CI：
+- `dsh-integration`：真实宿主 + 受控模型响应，含一次实际 `allowed-once` 自动批准、危险操作人工兜底，以及版本不匹配时的安装/启动拒绝；
+- `DSH Live Approval`：真实宿主 + OpenCode Go `deepseek-v4.1-flash` 真实分类模型，Shadow 模式。
+
+结果见[验收文档](./docs/ACCEPTANCE.md)。
+
+版本限制交给 DSH 自己的插件兼容性检查，而不是插件内的运行时探测：
+
+| DSH 版本 | 本版本插件 |
+| --- | --- |
+| `0.2.0-rc.2` | 支持 |
+| `0.2.0-rc.1`、`0.2.1-alpha.1/2` 及后续版本 | 不支持；具备 peer 检查的宿主会拒绝安装，已安装的会在启动时被跳过 |
+| `0.1.7-rc.2` 及更早版本 | 不支持；这些宿主未必执行 peer 检查，因此可能仍会加载插件，但不在验收范围内 |
+
+确需在其他版本上试用时，DSH 提供按精确版本的风险豁免：`dsh plugin allow-version dsh-auto-approve@<插件版本> --dsh-version <DSH 版本> --accept-risk`。豁免后的组合未经验收。`peerDependenciesMeta` 将该 peer 标为 optional，普通 `npm install` 不会因此拉入一套 DSH 宿主。
+
+以下旧接口兼容代码仍保留在插件中，但不再构成对旧版 DSH 的支持承诺。插件同时兼容 dsh 0.1.2 之前与之后的会话接口，按运行时特性探测选择调用方式：
 
 | 接口 | 0.1.2 之前 | 0.1.2 起 |
 | --- | --- | --- |

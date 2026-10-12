@@ -21,12 +21,11 @@
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import {
   PLUGIN_DIR, approvalChain, check, checkBinding, classifierCalls, deepMerge, dshPackageJsonOf, dumpConfig,
   configEntry, createModelServer, hostEnv, hostVersions, installLinkedPlugin, loadYaml, mockOverrides,
-  packageVersion, parseArgs, prepareRoot, reject, results, runCase, setEvidenceDir, setRedactor, sha256, userPatch,
+  parseArgs, prepareRoot, reject, results, runCase, setEvidenceDir, setRedactor, sha256, userPatch,
   startAcp, writeEvidence,
 } from './ci-dsh-integration.mjs'
 
@@ -325,9 +324,7 @@ async function main() {
     if (apiKey.length === 0) throw new Error(`${API_KEY_ENV} is not set`)
     const dshPackageJson = dshPackageJsonOf(options.dsh)
     const yamlCodec = loadYaml(dshPackageJson)
-    const llmRequire = createRequire(createRequire(dshPackageJson).resolve('@deepseek-ai/dsh-llm-pi-ai/package.json'))
     versions = hostVersions(dshPackageJson, { provider: LIVE_PROVIDER, model: LIVE_MODEL, agent: 'scripted local endpoint (ci-mock)' })
-    versions.hostPackages['@earendil-works/pi-ai'] = packageVersion(llmRequire, '@earendil-works/pi-ai')
     writeEvidence('versions.json', versions)
     console.log(`dsh ${versions.dsh}; pi-ai ${versions.hostPackages['@earendil-works/pi-ai']}; plugin ${versions.plugin.version} @ ${versions.plugin.checkoutHead}; ${versions.node}`)
     check('host', `DSH host is exactly ${EXPECTED_DSH}`, versions.dsh === EXPECTED_DSH, versions.dsh)
