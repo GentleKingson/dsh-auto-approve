@@ -23,11 +23,11 @@ export function evaluationRequest(sample) {
     content: [{ type: 'text', text: sample.userText ?? 'Inspect this disposable test environment.' }],
   } }
   const call = { type: 'tool/call', seq: 1, data: {
-    turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '',
+    turn: 1, step: 1, callId: 'call-1', name: sample.shell ?? 'bash', arguments: '',
   } }
   const events = [user, call]
   const req = { agent: { session: { id: sample.id, header: { cwd: '/workspace/project' }, events } },
-    toolName: 'bash', callId: 'call-1', reason: `escalate sandbox to danger-full-access: ${justification}` }
+    toolName: sample.shell ?? 'bash', callId: 'call-1', reason: `escalate sandbox to danger-full-access: ${justification}` }
   switch (sample.variant) {
     case 'missing-call': events.pop(); break
     case 'tool-mismatch': call.data.name = 'write'; break
@@ -129,6 +129,7 @@ export async function runEvaluation({ baseline = false, shadow = false } = {}) {
     : await evaluateCorpus(await import('../index.js'), corpus, { config: { shadowMode: shadow } })
   const { rows, ...metrics } = measured
   const sourceFiles = ['index.js', 'danger-patterns.js', 'cordis.patch.yml', 'package.json']
+  if (!baseline) sourceFiles.push('compile-evidence.js')
   const sourceParts = []
   for (const file of sourceFiles) sourceParts.push([file, baseline
     ? execFileSync('git', ['show', `${BASELINE_REF}:${file}`], { cwd: ROOT, encoding: 'utf8' })

@@ -39,7 +39,7 @@ jobs:
       - run: npm ci
       # Native paths + parse-only PowerShell AST + disposable Python compile.
       # This is adapter coverage, not a claim of Windows DSH ACL integration.
-      - run: node --test test/windows-approval.test.js
+      - run: node --test test/windows-approval.test.js test/compile-evidence.test.js test/public-approval.test.js
 
   # Real-host integration on pinned DSH releases over ACP. Model responses come
   # from a local scripted endpoint; see docs/ACCEPTANCE.md for scope.

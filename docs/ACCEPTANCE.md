@@ -1,5 +1,19 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-12：P2 受限复合语法与 P3 证据消费者（approval-v4）
+
+PR #2 已合并为 `e37cdf4`，对应功能分支已删除。其 Windows Node 22/24 各 9 项检查全部通过（零跳过），见 [Actions 38202460317](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38202460317)。以下 P2/P3 工作基于该主分支，不能把 PR #2 的结果当作本轮新增代码的 Windows 验收。
+
+P2 新增完整受限结构：一条静态命令后只允许 `if ($LASTEXITCODE -eq 0) { <单个字面字符串> }`。主命令的规则不变，原始完整命令继续用于模型、调用绑定和精确授权；不切掉未知后缀，不改写命令。原生 AST 对照在 Windows CI 中执行，运行时使用有限语法，不新增解析子进程或依赖。
+
+P3 完成的是**默认关闭的可信宿主证据消费者**：`pythonCompileReview: true` 且宿主提供 `autoApproveExecutionEvidence` 时，严格的 `-I -S -B -m py_compile` 单文件请求可进入分类器。提供者必须核验并在真实执行器强制绑定完整执行事实；本仓库没有内置生产提供者，现有 DSH 不因本插件新增接口而自动具备该能力。实际提供者实现、Windows ACL/执行绑定和生产自动编译尚未完成。接口详见 [COMPILE_EVIDENCE.md](./COMPILE_EVIDENCE.md)。
+
+消费者验证请求摘要、平台/Shell/完整结构、隔离参数、受保护运行时、真实源码/输出范围、有效期和同步 freshness；模型前后重检，提供者替换/快照变动/取消/超时转人工，晚到租约清理，编译批准不缓存。实际检查与执行之间的路径/程序替换必须由宿主阻止，不能由本地词法路径或临时 stat 推断安全。工具参数中的伪造证明在参数契约处被拒绝。
+
+本地验证：206 项，204 通过，2 项 Windows 原生 AST 对照在 Linux 跳过；新增 P3 测试使用合成宿主事实，没有执行危险候选命令。140 条固定 mock 回放保持 `unsafeAuto=0`、`safeToHuman=0`、`modelCalls=73`。Windows CI 现包含 P3 消费者测试，结果以本轮新 PR 的工作流为准。未测真实模型准确率、延迟和真实人工负担。
+
+当前原始截图请求仍需人工：缺少 `-I -S -B` 和宿主执行证明。P2 使其尾句不再因“不支持语法”被拒绝，但不会自动升级权限。回滚可关闭 `pythonCompileReview`、开启 `shadowMode`，或切回 `workspace-write`；不自动修改用户部署配置。
+
 ## 2026-10-12：Windows / pwsh 兼容与诊断（approval-v3）
 
 本轮基于 `de87493ae48e22169a83ea2cd026ea6639256e60` 工作树，未发布、未修改宿主 ACL，也未将原始截图命令加入自动批准白名单。下文旧版记录及 `approval-*.json` 保持为历史证据。
@@ -241,3 +255,5 @@ node scripts/tune-from-logs.mjs /absolute/path/to/session.jsonl
 - test/index.test.js、test/tune-from-logs.test.js、test/fixtures/approval-corpus.json：边界、生命周期、协议、别名和固定对照语料。
 - package.json：将离线语料加入发布文件列表；依赖和版本未变。
 - README.md、README_EN.md、docs/ACCEPTANCE.md、三个指标 JSON：迁移、来源/沙箱边界、回滚、实测与未验证状态。
+
+公开资料驱动的补充回归：见 [PUBLIC_SOURCE_TESTING.md](PUBLIC_SOURCE_TESTING.md)。该语料独立于原有 140 条基准，包含来源固定、在线引文核验和 Windows 原生解析对照；不作为真实模型准确率或生产灰度证据。

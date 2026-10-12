@@ -21,7 +21,50 @@ export const DEFAULT_DANGER_PATTERNS = Object.freeze([
   '(?=[^\\n]*\\b(?:rm|dd|mkfs(?:\\.[a-z0-9_-]+)?|chmod|chown)\\b)(?=[^\\n]*(?:\\$\\(|`|<\\())',
 ])
 
-export const POLICY_VERSION = 'approval-v3'
+export const POLICY_VERSION = 'approval-v5'
+
+/** A complete, deliberately tiny PowerShell grammar. The only compound form is
+ * one static command followed by an exit-code check that emits one literal.
+ * Never discard arbitrary suffixes or inspect only the first statement. */
+export function powershellCommandPlan(command) {
+  const single = powershellCommandWords(command)
+  if (single !== undefined) return Object.freeze({ kind: 'command', command, words: Object.freeze(single) })
+  if (typeof command !== 'string' || /[\r\n\0\u2018\u2019\u201c\u201d`]/.test(command)) return undefined
+  let quote
+  let separator = -1
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index]
+    if (quote) {
+      if (char === quote) quote = undefined
+    } else if (char === '"' || char === "'") quote = char
+    else if (char === ';') { separator = index; break }
+  }
+  if (separator < 0) return undefined
+  const primary = command.slice(0, separator).trim()
+  const words = powershellCommandWords(primary)
+  if (words === undefined) return undefined
+  const tail = command.slice(separator + 1)
+  const match = /^[ \t]*if[ \t]*\([ \t]*\$LASTEXITCODE[ \t]+-eq[ \t]+0[ \t]*\)[ \t]*\{[ \t]*(?:'([^']*)'|"([^"$]*)")[ \t]*\}[ \t]*$/i.exec(tail)
+  if (match === null) return undefined
+  const message = match[1] ?? match[2]
+  if (message.length > 200) return undefined
+  return Object.freeze({ kind: 'success-message', command: primary, words: Object.freeze(words), message })
+}
+
+export function pythonCompileCandidate(command, shell = 'bash') {
+  const plan = shell === 'pwsh' ? powershellCommandPlan(command) : undefined
+  const words = shell === 'pwsh' ? plan?.words : simpleCommandWords(command)
+  if (words === undefined) return undefined
+  const executable = words[0].split(/[\\/]/).at(-1)
+  if (!/^python\d*(?:\.\d+)?(?:\.exe)?$/i.test(executable)) return undefined
+  // Explicit isolation, no site initialization, and no implicit import caches.
+  // py_compile still writes its explicitly requested output despite -B.
+  if (words.length !== 7 || words[1] !== '-I' || words[2] !== '-S' || words[3] !== '-B'
+    || words[4] !== '-m' || words[5] !== 'py_compile' || !/\.py$/i.test(words[6])
+    || words[6].startsWith('-') || unverifiedWindowsPath(words[6])) return undefined
+  return Object.freeze({ executable: words[0], source: words[6],
+    structure: plan?.kind ?? 'command', ...(plan?.message === undefined ? {} : { message: plan.message }) })
+}
 
 export function isShellTool(name) {
   return name === 'bash' || name === 'pwsh'
@@ -138,7 +181,7 @@ function result(handoffReason, minimumRisk = 'low', literalDisplay = false) {
 /** Non-overridable action guards. Configurable regexes are an additional layer.
  * This function never executes or predicts arbitrary code. */
 export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) {
-  const words = commandWords(command, shell)
+  const words = shell === 'pwsh' ? powershellCommandPlan(command)?.words : commandWords(command, shell)
   if (words === undefined) return result('unsupported-syntax')
   let args = words.slice(1)
   let executable = words[0].split('/').at(-1)
@@ -234,6 +277,30 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     if (args[0]?.startsWith('-')) return result('uncertain')
     if (['clone', 'checkout', 'switch', 'reset', 'clean', 'pull'].includes(args[0])
       && (securityTarget(workdir) || (args[0] === 'clone' && securityTarget(resolve(workdir, args.at(-1)))))) return result('security-config')
+    if (args[0] === 'reset') {
+      // Git accepts unambiguous long-option abbreviations. Other reset modes
+      // still change index/ref state and cannot rely on a low-risk reply.
+      const options = args.slice(1, args.includes('--') ? args.indexOf('--') : undefined)
+      if (options.some(arg => /^--ha(?:r(?:d)?)?$/.test(arg))) return result('destructive')
+      return result(undefined, 'medium')
+    }
+    if (args[0] === 'clean') {
+      // clean.requireForce=false permits deletion even without -f. Only a
+      // proven dry run is eligible; exclusion values and operands are not flags.
+      let dryRun = false
+      for (let index = 1; index < args.length; index++) {
+        const arg = args[index]
+        if (arg === '--') break
+        if (arg === '-e' || arg === '--exclude') {
+          if (++index >= args.length) return result('uncertain')
+        } else if (arg.startsWith('--exclude=') || /^-e./.test(arg)) continue
+        else if (arg === '--dry-run') dryRun = true
+        else if (/^-[dfnqxX]+$/.test(arg)) dryRun ||= arg.includes('n')
+        else if (['--force', '--quiet'].includes(arg)) continue
+        else if (arg.startsWith('-')) return result('uncertain')
+      }
+      return dryRun ? result() : result('destructive')
+    }
     if (args[0] === 'push') {
       const pushArgs = args.slice(1)
       if (pushArgs.some(arg => /^--(?:force(?:-|$)|mirror(?:=|$)|delete(?:=|$))|^-[a-z]*[fd][a-z]*$|^\+/.test(arg))) return result('shared-environment')

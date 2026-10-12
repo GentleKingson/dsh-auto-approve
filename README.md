@@ -227,15 +227,17 @@ dsh plugin --profile web remove dsh-auto-approve
 
 ## 审计
 
-### Windows / PowerShell 审批诊断（approval-v3）
+### Windows / PowerShell 审批诊断（approval-v4）
 
-支持原生 `pwsh` 与 `bash/write/edit` 的一次性升级请求，仍逐项校验工具身份、完整参数和升级理由。`pwsh` 使用独立的保守静态解析：支持普通 Windows 路径与静态引号参数；当前只把已识别的 Git、Python、Node、PowerShell 原生命令族交给对应规则，未知命令和 PowerShell 别名不套用 Bash 语义。识别成功也不等于自动批准，仍须通过本地规则和模型评审。`; if (...)`、管道、重定向、变量展开、`&`、`--%` 等语法继续转人工。
+支持原生 `pwsh` 与 `bash/write/edit` 的一次性升级请求，仍逐项校验工具身份、完整参数和升级理由。`pwsh` 使用独立的保守静态解析，不把未知命令和 PowerShell 别名套用 Bash 语义。
 
-`/auto-report` 将本地规则转人工与分类器转人工分组，并解释 `unsupported-tool`、`call-unverified`、`unsupported-syntax`、`unsupported-command`、`path-unverified`、`python-compile-environment-unverified` 等原因。`call-sha256` 是原始 callId 经 `JSON.stringify` 后计算 SHA-256 的前 16 位，可与本地导出日志关联；报告不输出原始命令、路径或升级理由。
+P2 支持一种完整的复合形式：`<静态单命令>; if ($LASTEXITCODE -eq 0) { "固定文本" }`。主命令照常接受行动规则和模型评审，尾句只能输出一个最多 200 字符的静态字符串；额外语句、`else`、管道、重定向、展开、智能引号和空原生命令参数仍转人工。插件不删除或改写待执行命令；原始完整参数继续参与身份核验、精确授权和缓存。Windows CI 使用原生 PowerShell AST 校验支持子集的结构一致性；运行时不启动解析子进程。
 
-例如 `python -m py_compile "D:\AI\InvoiceTool.py"; if ($LASTEXITCODE -eq 0) { "SYNTAX OK" }` 会报告语法不支持。去掉 `if` 后可以识别编译意图，但仍会报告解释器和缓存落点未核验。`-I -S` 不能单独证明解释器可信，当前版本不自动放行 Python 编译。审批器不会改写原命令或将代理声称的 `sandbox permission issue / grantwrite` 当成已验证的 ACL 故障。
+P3 默认关闭：只有宿主提供 `autoApproveExecutionEvidence` 执行证据能力，且配置 `pythonCompileReview: true`，单个工作区文件的 `python -I -S -B -m py_compile <file.py>` 才可能进入模型评审。`-B` 禁止隐式导入缓存，但不会阻止 `py_compile` 写入目标 `.pyc`。宿主必须证明并在执行时强制绑定解释器、受保护的运行时、Shell 启动环境、源码真实路径和唯一缓存落点；仅提供工具参数、模型文字或项目 JSON 不能授权。证据缺失、失效、超时、环境变化仍人工；这类批准永不缓存。完整接口与验收边界见 [编译证据契约](./docs/COMPILE_EVIDENCE.md)。当前仓库实现的是证据消费者，**没有内置真实 DSH 证据提供者，单独启用配置不会自动放行编译**。
 
-Windows 路径保护覆盖反斜杠、大小写、已识别的敏感/配置目录和部分特殊路径；UNC、设备路径、盘符相对路径及绝对路径中的 ADS 转人工。这些是词法保护，不证明 junction/symlink 的真实落点。缓存绑定工具、宿主平台和策略版本。Windows 原生检查见 CI 的 `windows-approval`；实际 DSH Windows ACL、真实模型与灰度状态见[验收记录](./docs/ACCEPTANCE.md)。
+`/auto-report` 显示 `unsupported-tool`、`unsupported-syntax`、`python-compile-environment-unverified`、`compile-evidence-unavailable/invalid/cancelled/stale` 等具体分支。`call-sha256` 是原始 callId 经 `JSON.stringify` 后计算 SHA-256 的前 16 位，便于本地关联而不输出原始命令/理由。截图原命令现在可以识别成功提示尾句，但缺少隔离参数和可信执行证据，仍转人工。
+
+Windows 路径检查覆盖已识别的敏感/配置目录与部分特殊路径；词法检查本身不证明 junction/symlink 落点。真实路径证明必须由宿主提供并约束实际执行。代理声称的 `sandbox permission issue / grantwrite` 不是已验证的 ACL 故障，插件不会修改宿主 ACL。原生 Windows、实际 DSH、真实模型和灰度结果分开记录在[验收记录](./docs/ACCEPTANCE.md)。
 
 插件决策日志只记录固定原因码和来源，例如 `decision=auto-approve verdict=approve reasonCode=routine decisionSource=model`，不摘录命令、参数或 justification。权威审计台账仍由 dsh 内置、成对出现的 `approval/asked` 与 `approval/decided` 会话事件承担。
 
