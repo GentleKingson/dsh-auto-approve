@@ -312,16 +312,17 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     // accepts bundled short options and long-option abbreviations, so only
     // exact, known-safe options keep the low floor; anything else hands off.
     if (['checkout', 'switch'].includes(args[0])) {
-      const safeLong = ['--quiet', '--no-progress', '--progress', '--track', '--no-track', '--guess', '--no-guess', '--detach', '--create', '--force-create', '--orphan']
-      const safeShort = args[0] === 'checkout' ? /^-[qbBtl]+$/ : /^-[qcCtd]+$/
+      const safeLong = ['--quiet', '--no-progress', '--progress', '--track', '--no-track', '--guess', '--no-guess', '--detach', '--create', '--orphan']
+      const safeShort = args[0] === 'checkout' ? /^-[qbtl]+$/ : /^-[qctd]+$/
       const rest = args.slice(1)
       const separator = rest.indexOf('--')
       const options = rest.slice(0, separator < 0 ? undefined : separator).filter(arg => arg.startsWith('-'))
       if (separator >= 0) return result('destructive')
-      if (options.some(arg => /^-[^-]*[fp]/.test(arg) || /^--(?:fo|pa|pathspec|disc|no-ov|ov|ours|theirs|merge|conflict)/.test(arg))) return result('destructive')
+      // -B/-C (--force-create) reset an existing branch to the start point.
+      if (options.some(arg => /^-[^-]*[fpBC]/.test(arg) || /^--(?:fo|pa|pathspec|disc|no-ov|ov|ours|theirs|merge|conflict)/.test(arg))) return result('destructive')
       if (options.some(arg => !safeLong.includes(arg.split('=')[0]) && !safeShort.test(arg))) return result('uncertain')
       const operands = rest.filter(arg => !arg.startsWith('-'))
-      const creates = options.some(arg => /^-[^-]*[bBcC]/.test(arg) || ['--create', '--force-create', '--orphan'].includes(arg))
+      const creates = options.some(arg => /^-[^-]*[bc]/.test(arg) || ['--create', '--orphan'].includes(arg))
       if (args[0] === 'checkout') {
         if (operands.includes('.') || operands.length > (creates ? 2 : 1)) return result('destructive')
         // `git checkout <name>` is lexically a branch switch or a file

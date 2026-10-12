@@ -90,8 +90,9 @@ test('checkout and switch discard variants never auto-approve under a permissive
   // (branch or file), so it carries a medium floor; `git switch` stays low.
   const reply = { risk: 'low', verdict: 'approve', reasonCode: 'routine' }
   const manual = ['git checkout -qf master', 'git switch -qf master', 'git checkout --fo master', 'git checkout HEAD --pathspec-from-file=paths.txt',
-    'git checkout example.txt', 'git switch --disc dev', 'git checkout --ours a.js', 'git restore --staged --wor a.js', 'git checkout -m main']
-  const auto = ['git switch master', 'git switch -c topic', 'git checkout -b topic', 'git switch --detach v1.0']
+    'git checkout example.txt', 'git switch --disc dev', 'git checkout --ours a.js', 'git restore --staged --wor a.js', 'git checkout -m main',
+    'git checkout -B topic', 'git checkout -qB topic', 'git switch -C topic', 'git switch -qC topic', 'git switch --force-create topic', 'git checkout -B topic main']
+  const auto = ['git switch master', 'git switch -c topic', 'git switch -qc topic', 'git checkout -b topic', 'git checkout -qb topic', 'git switch --detach v1.0']
   const cases = [...manual.map(command => ({ command, expected: 'manual' })), ...auto.map(command => ({ command, expected: 'auto' }))]
     .map((entry, index) => ({ ...entry, id: `checkout-${index}`, shell: 'bash', risk: 'low', classifierReply: reply }))
   const result = await evaluateCorpus(plugin, { cases }, { config: { shadowMode: false } })
