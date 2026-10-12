@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isAbsolute, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
-import { DEFAULT_DANGER_PATTERNS, POLICY_VERSION, commandWords, containsSecret, inspectCommand, isShellTool, securityTarget, sensitivePath, unverifiedWindowsPath } from './danger-patterns.js'
+import { acquireCompileEvidence, COMPILE_EVIDENCE_SERVICE, compileEvidenceRequest } from './compile-evidence.js'
+import { DEFAULT_DANGER_PATTERNS, POLICY_VERSION, commandWords, containsSecret, inspectCommand, isShellTool, powershellCommandPlan, securityTarget, sensitivePath, unverifiedWindowsPath } from './danger-patterns.js'
 
 export { DEFAULT_DANGER_PATTERNS } from './danger-patterns.js'
 
@@ -23,6 +24,7 @@ const CLASSIFIER_SYSTEM_PROMPT = [
   'High risk always asks, even if the user authorizes it. Ask for irreversible loss of important existing data, shared or production state changes, force pushes, credential access or exfiltration, executing unknown external code, persistence and changes to DSH plugins or permission policy.',
   'Dependency installation can execute lifecycle scripts; do not assume it is low risk. A developer-branch push requires precise authorization. DSH runtime configuration writes are security changes. Builds and tests may execute project code; inspect their concrete scope rather than trusting their names.',
   'Respect the shell and platform facts. PowerShell aliases and native programs can have different semantics from Bash commands. Executable resolution is not established by the command name. A sandbox/ACL failure stated in justification does not prove either a failure or the safety of retrying without confinement.',
+  'When present, compileEvidence is a locally validated summary from a host-owned execution capability bound to this exact request. It proves only the stated isolated Python compilation and output scope, not user authorization. All genuine user restrictions still apply.',
   'Preserve earlier genuine user restrictions in userMessages and newer revocations. Historical consent alone cannot authorize a new operation. Unknown sources, effects, destinations or targets of significant changes ask.',
   'danger-full-access removes the workspace sandbox for this entire invocation, not only a named path. The grant remains allowed-once. Finite local guards do not prove arbitrary scripts safe; minimumRisk is a floor and riskHints are warnings, never permission.',
 ].join('\n')
@@ -46,6 +48,10 @@ const HANDOFF_EXPLANATIONS = Object.freeze({
   'path-unverified': '路径范围无法核验 / Unverified path scope',
   'execution-environment-unverified': '执行程序来源无法核验 / Unverified executable',
   'python-compile-environment-unverified': '已识别 Python 编译；解释器和缓存落点尚未核验 / Python compile environment unverified',
+  'compile-evidence-unavailable': '宿主未提供可信编译证据接口 / Host compile evidence unavailable',
+  'compile-evidence-invalid': '宿主编译证据不完整或不匹配 / Invalid host compile evidence',
+  'compile-evidence-cancelled': '编译证据获取取消或超时 / Compile evidence cancelled or timed out',
+  'compile-evidence-stale': '编译执行环境已变化 / Compile execution evidence changed',
   'untrusted-execution': '解释器或间接执行需人工判断 / Interpreter or indirect execution',
   timeout: '分类器超时 / Classifier timeout',
   ask: '分类器要求人工判断 / Classifier requested review',
@@ -73,6 +79,7 @@ export const Config = Schema.object({
   sessionMemory: Schema.boolean().default(true),
   sessionMemoryTtlMs: Schema.number().step(1).min(1).max(2_147_483_647).default(1_800_000),
   shadowMode: Schema.boolean().default(false),
+  pythonCompileReview: Schema.boolean().default(false),
 })
 
 const SESSION_MEMORY_MAX_ENTRIES = 200
@@ -281,7 +288,7 @@ function userRestricted(verified, userMessage) {
   // This small set handles direct restrictions. Other wording remains full
   // trusted classifier context; it is never cut off or silently discarded.
   if (directInstruction(verified, userMessage.text)) return false
-  const words = commandWords(verified.command ?? '', verified.call.name) ?? []
+  const words = (verified.call.name === 'pwsh' ? powershellCommandPlan(verified.command ?? '')?.words : commandWords(verified.command ?? '', verified.call.name)) ?? []
   return userMessage.messages.some(({ text }) => {
     if (typeof text !== 'string') return false
     const restriction = text.trim()
@@ -607,6 +614,8 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
     return { session, verified, userMessage, workspacePath, workdir, selection, key, scope }
   }
   return async (req, next) => {
+    let compileEvidence
+    let compileProvider
     let reportCommand = '(evidence unavailable; arguments omitted)'
     let categorized = false
     let autoPreset = false
@@ -645,11 +654,13 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       reportCommand = safeCommandSummary(verified)
       memory?.observe(session.id, context.scope)
       if (Object.values(verified.args).filter(value => typeof value === 'string').concat(userMessage.messages.map(message => message.text ?? '')).some(containsSecret)) return handoff('danger', 'sensitive-evidence', 'rule')
-      const action = isShellTool(verified.call.name)
+      let action = isShellTool(verified.call.name)
         ? inspectCommand(verified.command, { workdir: context.workdir, shell: verified.call.name })
         : { handoffReason: securityTarget(verified.args.file_path) || securityTarget(resolve(context.workspacePath, verified.args.file_path)) ? 'security-config'
           : sensitivePath(verified.args.file_path) || sensitivePath(resolve(context.workspacePath, verified.args.file_path)) ? 'credentials' : undefined, minimumRisk: 'medium', literalDisplay: false }
-      if (action.handoffReason !== undefined) return handoff('danger', action.handoffReason, 'rule')
+      const compileRequest = config.pythonCompileReview && action.handoffReason === 'python-compile-environment-unverified'
+        ? compileEvidenceRequest(context, req) : undefined
+      if (action.handoffReason !== undefined && compileRequest === undefined) return handoff('danger', action.handoffReason, 'rule')
       if (verified.args.run_in_background === true) return handoff('danger', 'persistence', 'rule')
       if (userRestricted(verified, userMessage)) return handoff('danger', 'user-restriction', 'rule')
       // Default regexes are hints; high-confidence action guards above cannot
@@ -658,15 +669,27 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       const danger = findDangerMatch(actionText, patterns.filter(pattern => !pattern.builtin))
       if (danger !== undefined) return handoff('danger', 'configured-rule', 'rule')
 
+      if (compileRequest !== undefined) {
+        compileProvider = ctx.get(COMPILE_EVIDENCE_SERVICE)
+        const signals = [req.signal, lifetimeSignal].filter(Boolean)
+        compileEvidence = await trackClassification(() => acquireCompileEvidence(compileProvider, compileRequest, {
+          timeoutMs: config.timeoutMs, signal: signals.length ? AbortSignal.any(signals) : undefined,
+        }))
+        if (compileEvidence.error !== undefined) return handoff('missing-evidence', compileEvidence.error)
+        if (contextOf(req).key !== context.key || ctx.get(COMPILE_EVIDENCE_SERVICE) !== compileProvider || !compileEvidence.isCurrent()) return handoff('missing-evidence', 'compile-evidence-stale')
+        action = { ...action, handoffReason: undefined }
+      }
+
       const beforeClassification = cancellationDetail(req, lifetimeSignal)
       if (beforeClassification !== undefined) {
         memory?.clear(session.id)
         return handoff('classifier-manual', beforeClassification)
       }
-      const memoryKey = config.sessionMemory && !config.shadowMode && memory !== undefined && context.selection !== undefined
+      const memoryKey = compileEvidence === undefined && config.sessionMemory && !config.shadowMode && memory !== undefined && context.selection !== undefined
         ? context.key : undefined
       const approve = (source, reasonCode, detail, risk) => {
         const stale = () => cancellationDetail(req, lifetimeSignal) ?? (contextOf(req).key === context.key ? undefined : 'context-changed')
+          ?? (compileEvidence !== undefined && (ctx.get(COMPILE_EVIDENCE_SERVICE) !== compileProvider || !compileEvidence.isCurrent()) ? 'compile-evidence-stale' : undefined)
         const before = stale()
         if (before !== undefined) { memory?.clear(session.id); return handoff('missing-evidence', before) }
         logDecision(ctx, config.shadowMode ? 'shadow-approve' : 'auto-approve', `${detail} reasonCode=${reasonCode} decisionSource=${source}`)
@@ -698,6 +721,7 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
         minimumRisk: action.minimumRisk,
         riskHints: action.literalDisplay ? [] : patterns.filter(pattern => pattern.builtin && pattern.regexp.test(actionText)).map(pattern => digest(pattern.source).slice(0, 12)),
         policyVersion: POLICY_VERSION,
+        ...(compileEvidence === undefined ? {} : { compileEvidence: compileEvidence.summary }),
       }, context.selection, lifetimeSignal, trackIteratorCleanup))
       if (decision.verdict === 'approve') {
         if (action.minimumRisk === 'medium' && decision.risk === 'low') return handoff('classifier-manual', 'risk-understated', 'model')
@@ -715,6 +739,8 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
         // A broken logger must not replace the required manual fallback with a rejection.
       }
       return delegate()
+    } finally {
+      compileEvidence?.dispose?.()
     }
   }
 }

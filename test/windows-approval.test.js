@@ -6,7 +6,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Config, createApprovalHandler } from '../index.js'
-import { inspectCommand, powershellCommandWords, securityTarget, sensitivePath, unverifiedWindowsPath } from '../danger-patterns.js'
+import { inspectCommand, powershellCommandPlan, powershellCommandWords, securityTarget, sensitivePath, unverifiedWindowsPath } from '../danger-patterns.js'
 
 function request(command = 'git status', tool = 'pwsh') {
   const justification = 'due to a sandbox permission issue (same as grantwrite acl problem)'
@@ -55,7 +55,7 @@ test('pwsh uses its verified command and reaches classification with shell/platf
 
 test('PowerShell handoffs distinguish unsupported syntax, aliases, and Python execution', async () => {
   const cases = [
-    [String.raw`python -m py_compile "D:\AI\票据审核应用\InvoiceTool.py"; if ($LASTEXITCODE -eq 0) { "SYNTAX OK" }`, 'unsupported-syntax'],
+    [String.raw`python -m py_compile "D:\AI\票据审核应用\InvoiceTool.py"; if ($LASTEXITCODE -eq 0) { "SYNTAX OK" }`, 'python-compile-environment-unverified'],
     [String.raw`python -m py_compile "D:\AI\票据审核应用\InvoiceTool.py"`, 'python-compile-environment-unverified'],
     ['python -I -S -m py_compile InvoiceTool.py', 'python-compile-environment-unverified'],
     ['python -c "print(1)"', 'untrusted-execution'],
@@ -121,6 +121,56 @@ const staticCommands = [
   ['git status', ['git', 'status']],
   ['git diff "literal;name"', ['git', 'diff', 'literal;name']],
 ]
+
+const compoundCommands = [
+  'git status; if ($LASTEXITCODE -eq 0) { "SYNTAX OK" }',
+  String.raw`python -I -S -B -m py_compile "D:\AI\票据 审核\InvoiceTool.py"; if ($LASTEXITCODE -eq 0) { 'SYNTAX OK' }`,
+  'git status ; IF ( $lastExitCode -eq 0 ) { "Done" }',
+]
+
+test('PowerShell success-message grammar validates the entire suffix and primary command', () => {
+  for (const command of compoundCommands) assert.equal(powershellCommandPlan(command)?.kind, 'success-message')
+  for (const command of [
+    'git status; if ($LASTEXITCODE -eq 0) { whoami }',
+    'git status; if ($LASTEXITCODE -eq 0) { "$(whoami)" }',
+    'git status; if ($LASTEXITCODE -eq 0) { "OK"; whoami }',
+    'git status; if ($LASTEXITCODE -eq 0) { "OK" }; whoami',
+    'git status; if ($LASTEXITCODE -eq 0) { "OK" } else { whoami }',
+    'git status; if ($LASTEXITCODE -ne 0) { "OK" }',
+    'git status; if ($LASTEXITCODE -eq (whoami)) { "OK" }',
+    'git status; whoami; if ($LASTEXITCODE -eq 0) { "OK" }',
+    'git status | whoami; if ($LASTEXITCODE -eq 0) { "OK" }',
+    'git status; if ($LASTEXITCODE -eq 0) { "`"; whoami; "" }',
+  ]) assert.equal(powershellCommandPlan(command), undefined, command)
+  assert.equal(inspectCommand('git push origin main --force; if ($LASTEXITCODE -eq 0) { "OK" }', { shell: 'pwsh' }).handoffReason, 'shared-environment')
+})
+
+test('bounded compound grammar agrees with native PowerShell AST (parse only)', { skip: process.platform !== 'win32' }, () => {
+  const script = `
+$items = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$results = @()
+foreach ($item in $items) {
+  $tokens = $null; $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($item, [ref]$tokens, [ref]$errors)
+  if ($errors.Count -ne 0 -or $ast.EndBlock.Statements.Count -ne 2) { throw 'Unexpected statements' }
+  $primary = $ast.EndBlock.Statements[0]
+  $condition = $ast.EndBlock.Statements[1]
+  if ($primary.PipelineElements.Count -ne 1 -or $condition -isnot [System.Management.Automation.Language.IfStatementAst] -or $condition.Clauses.Count -ne 1 -or $null -ne $condition.ElseClause) { throw 'Unexpected control flow' }
+  $expr = $condition.Clauses[0].Item1.PipelineElements[0].Expression
+  if ($expr -isnot [System.Management.Automation.Language.BinaryExpressionAst] -or $expr.Operator.ToString() -ne 'Ieq' -or $expr.Left.VariablePath.UserPath.ToLowerInvariant() -ne 'lastexitcode' -or $expr.Right.Value -ne 0) { throw 'Unexpected condition' }
+  $body = $condition.Clauses[0].Item2.Statements
+  $literal = $body[0].PipelineElements[0].Expression
+  if ($body.Count -ne 1 -or $body[0].PipelineElements.Count -ne 1 -or $literal -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { throw 'Unexpected body' }
+  $results += @{ kind = 'success-message'; command = $primary.Extent.Text; message = $literal.Value }
+}
+ConvertTo-Json -InputObject $results -Compress
+`
+  const actual = JSON.parse(execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', script], { input: JSON.stringify(compoundCommands), encoding: 'utf8', timeout: 15000 }))
+  assert.deepEqual(actual, compoundCommands.map(command => {
+    const { kind, command: primary, message } = powershellCommandPlan(command)
+    return { kind, command: primary, message }
+  }))
+})
 
 test('static PowerShell tokenizer preserves literal Windows paths and rejects expansion/composition', () => {
   for (const [command, words] of staticCommands) assert.deepEqual(powershellCommandWords(command), words)

@@ -129,6 +129,7 @@ export async function runEvaluation({ baseline = false, shadow = false } = {}) {
     : await evaluateCorpus(await import('../index.js'), corpus, { config: { shadowMode: shadow } })
   const { rows, ...metrics } = measured
   const sourceFiles = ['index.js', 'danger-patterns.js', 'cordis.patch.yml', 'package.json']
+  if (!baseline) sourceFiles.push('compile-evidence.js')
   const sourceParts = []
   for (const file of sourceFiles) sourceParts.push([file, baseline
     ? execFileSync('git', ['show', `${BASELINE_REF}:${file}`], { cwd: ROOT, encoding: 'utf8' })
