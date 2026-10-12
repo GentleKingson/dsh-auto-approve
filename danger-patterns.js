@@ -318,6 +318,9 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
       const separator = rest.indexOf('--')
       const options = rest.slice(0, separator < 0 ? undefined : separator).filter(arg => arg.startsWith('-'))
       if (separator >= 0) return result('destructive')
+      // `switch --orphan` removes every tracked file from the worktree;
+      // `checkout --orphan` keeps the worktree and index, so it stays low.
+      if (args[0] === 'switch' && options.some(arg => arg.split('=')[0] === '--orphan')) return result('destructive')
       // -B/-C (--force-create) reset an existing branch to the start point.
       if (options.some(arg => /^-[^-]*[fpBC]/.test(arg) || /^--(?:fo|pa|pathspec|disc|no-ov|ov|ours|theirs|merge|conflict)/.test(arg))) return result('destructive')
       if (options.some(arg => !safeLong.includes(arg.split('=')[0]) && !safeShort.test(arg))) return result('uncertain')

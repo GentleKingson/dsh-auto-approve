@@ -66,7 +66,7 @@ inspectCommand('git checkout -- .', at) // { minimumRisk: 'low' }，无 handoffR
 
 | 缺口 | 新行为 |
 | --- | --- |
-| `git checkout`/`git switch`：带 `--`、多个路径或 `.`；短选项合并中含 `f`/`p`（如 `-qf`）；重置已有分支的 `checkout -B`、`switch -C`（含 `-qB`/`-qC`）；`--force`、`--force-create`、`--discard-changes`、`--pathspec-from-file`、`--ours/--theirs`、`--merge`、`--no-overlay` 及其缩写（如 `--fo`）；`git restore`（仅 `--staged`/`-S`/`-q` 组合除外） | 规则转人工 `destructive` |
+| `git checkout`/`git switch`：带 `--`、多个路径或 `.`；短选项合并中含 `f`/`p`（如 `-qf`）；重置已有分支的 `checkout -B`、`switch -C`（含 `-qB`/`-qC`）；从工作区删除所有已跟踪文件的 `switch --orphan`（`checkout --orphan` 保留工作区与索引，仍为 low）；`--force`、`--force-create`、`--discard-changes`、`--pathspec-from-file`、`--ours/--theirs`、`--merge`、`--no-overlay` 及其缩写（如 `--fo`）；`git restore`（仅 `--staged`/`-S`/`-q` 组合除外） | 规则转人工 `destructive` |
 | checkout/switch 中不在白名单内的其他选项（含无法确认的缩写） | 规则转人工 `uncertain` |
 | `git checkout <单个名称>`：不读仓库状态时，无法区分切换分支与恢复同名文件 | `medium` 下限。需要 low 自动批准时请用 `git switch <分支>`；`checkout -b` 仍为 low |
 | `git merge/rebase/cherry-pick/revert/am/stash`（`stash list/show` 除外） | `medium` 下限：模型答 low 即转人工，medium 需用户明确授权 |
