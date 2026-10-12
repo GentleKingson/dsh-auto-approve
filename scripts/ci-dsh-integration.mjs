@@ -20,16 +20,16 @@ import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const MODEL_PROVIDER = 'ci-mock'
-const MODEL_ID = 'ci-mock-model'
-const CLASSIFIER_MARKER = 'Classify a coding agent request for one-time sandbox escalation.'
+export const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+export const MODEL_PROVIDER = 'ci-mock'
+export const MODEL_ID = 'ci-mock-model'
+export const CLASSIFIER_MARKER = 'Classify a coding agent request for one-time sandbox escalation.'
 const PROMPT_TIMEOUT_MS = 90_000
 const EXIT_TIMEOUT_MS = 20_000
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {}
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index]
@@ -45,43 +45,56 @@ function parseArgs(argv) {
   return options
 }
 
-function within(child, parent) {
+export function within(child, parent) {
   const path = relative(parent, child)
   return path === '' || (!path.startsWith('..') && !path.startsWith(sep) && path !== '..')
 }
 
-function canonical(path) {
+export function canonical(path) {
   try { return realpathSync(path) } catch { return path }
 }
 
-function sha256(text) {
+export function sha256(text) {
   return createHash('sha256').update(text).digest('hex')
 }
 
 // ---------------------------------------------------------------- evidence
 
-const results = []
+export const results = []
 let evidenceDir
+let redact = text => text
 
-function writeEvidence(name, value) {
+/** Point evidence files at a directory; scripts/ci-dsh-live.mjs keeps them private. */
+export function setEvidenceDir(dir) {
+  evidenceDir = dir
+}
+
+/** Filter for failure details printed to the console. */
+export function setRedactor(fn) {
+  redact = fn
+}
+
+export function writeEvidence(name, value) {
   const text = typeof value === 'string' ? value : `${JSON.stringify(value, null, 2)}\n`
   writeFileSync(join(evidenceDir, name), text)
 }
 
-function check(caseName, description, condition, detail) {
+export function check(caseName, description, condition, detail) {
   const passed = Boolean(condition)
   results.push({ case: caseName, check: description, passed, ...(detail === undefined ? {} : { detail }) })
-  console.log(`${passed ? 'PASS' : 'FAIL'} [${caseName}] ${description}${!passed && detail !== undefined ? ` :: ${JSON.stringify(detail)}` : ''}`)
+  console.log(redact(`${passed ? 'PASS' : 'FAIL'} [${caseName}] ${description}${!passed && detail !== undefined ? ` :: ${JSON.stringify(detail)}` : ''}`))
   return passed
 }
 
 // ------------------------------------------------------- scripted model
 
 /** Local OpenAI-compatible endpoint: agent turns follow a fixed script per case, classifier turns return a fixed verdict. */
-function createModelServer() {
+export function createModelServer() {
   const scripts = new Map()
   const classifierVerdicts = new Map()
   const log = []
+  // Used when a prompt must be the user's exact words and cannot carry a [ci-case:...] tag.
+  let currentCase
   const server = createServer((req, res) => {
     let body = ''
     req.setEncoding('utf8')
@@ -119,14 +132,14 @@ function createModelServer() {
       const evidenceText = textOf(messages.find(m => m.role === 'user')?.content)
       let evidence
       try { evidence = JSON.parse(evidenceText) } catch { evidence = undefined }
-      const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(evidence?.latestUserMessage ?? '')?.[1] ?? 'unknown'
+      const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(evidence?.latestUserMessage ?? '')?.[1] ?? currentCase ?? 'unknown'
       const verdict = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
       log.push({ kind: 'classifier', case: caseName, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
       stream(res, { text: verdict })
       return
     }
     const userText = messages.filter(m => m.role === 'user').map(m => textOf(m.content)).join('\n')
-    const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(userText)?.[1] ?? 'unknown'
+    const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(userText)?.[1] ?? currentCase ?? 'unknown'
     const steps = scripts.get(caseName) ?? []
     const step = messages.filter(m => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0).length
     const toolResults = messages.filter(m => m.role === 'tool').map(m => ({ toolCallId: m.tool_call_id, content: textOf(m.content) }))
@@ -164,6 +177,9 @@ function createModelServer() {
       scripts.set(caseName, steps)
       if (classifierVerdict !== undefined) classifierVerdicts.set(caseName, classifierVerdict)
     },
+    setCurrentCase(caseName) {
+      currentCase = caseName
+    },
     listen() {
       return new Promise((resolvePort, reject) => {
         server.once('error', reject)
@@ -180,7 +196,7 @@ function createModelServer() {
 // ----------------------------------------------------------- ACP client
 
 /** Minimal ACP (JSON-RPC 2.0 over newline-delimited stdio) client using only the standard v1 methods. */
-function startAcp({ dsh, cwd, env, stderrPath, label }) {
+export function startAcp({ dsh, cwd, env, stderrPath, label }) {
   const child = spawn(process.execPath, [dsh, '--profile', 'acp'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
   const pending = new Map()
   const transcript = []
@@ -289,7 +305,7 @@ function startAcp({ dsh, cwd, env, stderrPath, label }) {
 
 // ------------------------------------------------------------ host data
 
-function readSessionLogs(dshHome) {
+export function readSessionLogs(dshHome) {
   const root = join(dshHome, 'sessions')
   const events = []
   const visit = dir => {
@@ -314,7 +330,7 @@ class JsExpression {
   constructor(source) { this.source = source }
 }
 
-function loadYaml(dshPackageJson) {
+export function loadYaml(dshPackageJson) {
   const require = createRequire(dshPackageJson)
   const yaml = require('js-yaml')
   const jsType = new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: source => new JsExpression(source), instanceOf: JsExpression, represent: value => value.source })
@@ -326,7 +342,7 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsExpression)
 }
 
-function deepMerge(base, override) {
+export function deepMerge(base, override) {
   if (!isPlainObject(base) || !isPlainObject(override)) return override
   const merged = { ...base }
   for (const [key, value] of Object.entries(override)) merged[key] = deepMerge(base[key], value)
@@ -338,7 +354,7 @@ function deepMerge(base, override) {
  * patched entry restates its composed (bundle) config with only the listed
  * keys changed. Restating keeps every other bundle value, e.g. the preset table.
  */
-function userPatch(defaultTree, overrides, disabled = []) {
+export function userPatch(defaultTree, overrides, disabled = []) {
   return Object.entries(overrides).map(([id, override]) => {
     const entries = configEntry(defaultTree, id)
     if (entries.length !== 1) throw new Error(`expected exactly one composed entry ${id}, found ${entries.length}`)
@@ -346,33 +362,33 @@ function userPatch(defaultTree, overrides, disabled = []) {
   })
 }
 
-function packageVersion(require, name) {
+export function packageVersion(require, name) {
   try { return require(`${name}/package.json`).version } catch { return null }
 }
 
 // ------------------------------------------------------------------ main
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2))
-  evidenceDir = options.evidence
-  mkdirSync(evidenceDir, { recursive: true })
-  const root = options.root
+/** A fresh, empty root outside the workspace-write temp areas, with the three case directories. */
+export function prepareRoot(root) {
   for (const temp of ['/tmp', tmpdir()]) {
     if (within(canonical(root), canonical(temp))) throw new Error(`--root ${root} is inside the workspace-write temp area ${temp}; choose a directory outside it`)
   }
   if (existsSync(root) && readdirSync(root).length > 0) throw new Error(`--root ${root} must be empty`)
-  const dshHome = join(root, 'dsh-home')
-  const workspace = join(root, 'workspace')
-  const outside = join(root, 'outside')
-  for (const dir of [dshHome, workspace, outside]) mkdirSync(dir, { recursive: true })
+  const dirs = { dshHome: join(root, 'dsh-home'), workspace: join(root, 'workspace'), outside: join(root, 'outside') }
+  for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
+  return dirs
+}
 
-  const dshPackageJson = join(dirname(canonical(options.dsh)), '..', 'package.json')
+export function dshPackageJsonOf(dsh) {
+  return join(dirname(canonical(dsh)), '..', 'package.json')
+}
+
+/** Host, plugin and runtime identity for the evidence. */
+export function hostVersions(dshPackageJson, model) {
   const dshRequire = createRequire(dshPackageJson)
-  const yamlCodec = loadYaml(dshPackageJson)
-  const parseYaml = yamlCodec.parse
   const git = args => spawnSync('git', args, { cwd: PLUGIN_DIR, encoding: 'utf8' }).stdout?.trim() ?? null
   const runtimeFiles = ['index.js', 'danger-patterns.js', 'cordis.patch.yml', 'package.json']
-  const versions = {
+  return {
     date: new Date().toISOString(),
     os: `${process.platform} ${process.arch}`,
     node: process.version,
@@ -388,26 +404,28 @@ async function main() {
       // Same definition as scripts/approval-evaluation.mjs and docs/ACCEPTANCE.md.
       sourceSha256: sha256(JSON.stringify(runtimeFiles.map(file => [file, readFileSync(join(PLUGIN_DIR, file), 'utf8')]))),
     },
-    model: { provider: MODEL_PROVIDER, model: MODEL_ID, note: 'scripted local endpoint; not a real model' },
+    model,
   }
-  writeEvidence('versions.json', versions)
-  console.log(`dsh ${versions.dsh}; plugin ${versions.plugin.version} @ ${versions.plugin.prHead ?? versions.plugin.checkoutHead} (checkout ${versions.plugin.checkoutHead}); ${versions.node}`)
+}
 
-  const baseEnv = { ...process.env, DSH_HOME: dshHome, CI_MOCK_API_KEY: 'ci-mock-key', DSH_TELEMETRY_MODE: 'DISABLED', NO_COLOR: '1' }
-  delete baseEnv.DSH_PERMISSION_MODE
-  for (const key of Object.keys(baseEnv)) if (/^(DEEPSEEK|OPENAI|ANTHROPIC)_/.test(key)) delete baseEnv[key]
+/** The host environment: a private DSH_HOME and no ambient model credentials. */
+export function hostEnv(dshHome) {
+  const env = { ...process.env, DSH_HOME: dshHome, CI_MOCK_API_KEY: 'ci-mock-key', DSH_TELEMETRY_MODE: 'DISABLED', NO_COLOR: '1' }
+  delete env.DSH_PERMISSION_MODE
+  for (const key of Object.keys(env)) if (/^(DEEPSEEK|OPENAI|ANTHROPIC)_/.test(key)) delete env[key]
+  return env
+}
 
-  // Install this checkout through the host's own plugin manager.
-  const install = spawnSync(process.execPath, [options.dsh, 'plugin', '--profile', 'acp', 'add', `link:${PLUGIN_DIR}`], { cwd: root, env: baseEnv, encoding: 'utf8', timeout: 300_000 })
-  writeEvidence('plugin-install.log', `${install.stdout ?? ''}\n${install.stderr ?? ''}`)
-  if (install.status !== 0) throw new Error(`dsh plugin add failed with status ${install.status}; see plugin-install.log`)
+/** Install a local package through the host's own plugin manager. */
+export function installLinkedPlugin(options, cwd, env, dir, logName) {
+  const install = spawnSync(process.execPath, [options.dsh, 'plugin', '--profile', 'acp', 'add', `link:${dir}`], { cwd, env, encoding: 'utf8', timeout: 300_000 })
+  writeEvidence(logName, `${install.stdout ?? ''}\n${install.stderr ?? ''}`)
+  if (install.status !== 0) throw new Error(`dsh plugin add ${dir} failed with status ${install.status}; see ${logName}`)
+}
 
-  const model = createModelServer()
-  const port = await model.listen()
-  const profileDir = join(dshHome, 'profiles', 'acp')
-  const patchFile = join(profileDir, 'cordis.patch.yml')
-  let defaultTree
-  const overrides = {
+/** User-layer overrides for the disposable ACP profile; the scripted endpoint serves every model call. */
+export function mockOverrides(port) {
+  return {
     'auto-approve': { shadowMode: true, sessionMemory: false },
     permission: { defaultPreset: 'sandboxed-auto' },
     'sandbox-policy': { mode: 'workspace-write' },
@@ -429,6 +447,33 @@ async function main() {
     'agent-default-model': { provider: MODEL_PROVIDER, model: MODEL_ID },
     acp: { provider: MODEL_PROVIDER, model: MODEL_ID },
   }
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2))
+  evidenceDir = options.evidence
+  mkdirSync(evidenceDir, { recursive: true })
+  const root = options.root
+  const { dshHome, workspace, outside } = prepareRoot(root)
+
+  const dshPackageJson = dshPackageJsonOf(options.dsh)
+  const yamlCodec = loadYaml(dshPackageJson)
+  const parseYaml = yamlCodec.parse
+  const versions = hostVersions(dshPackageJson, { provider: MODEL_PROVIDER, model: MODEL_ID, note: 'scripted local endpoint; not a real model' })
+  writeEvidence('versions.json', versions)
+  console.log(`dsh ${versions.dsh}; plugin ${versions.plugin.version} @ ${versions.plugin.prHead ?? versions.plugin.checkoutHead} (checkout ${versions.plugin.checkoutHead}); ${versions.node}`)
+
+  const baseEnv = hostEnv(dshHome)
+
+  // Install this checkout through the host's own plugin manager.
+  installLinkedPlugin(options, root, baseEnv, PLUGIN_DIR, 'plugin-install.log')
+
+  const model = createModelServer()
+  const port = await model.listen()
+  const profileDir = join(dshHome, 'profiles', 'acp')
+  const patchFile = join(profileDir, 'cordis.patch.yml')
+  let defaultTree
+  const overrides = mockOverrides(port)
   const patch = enabled => `# Written by scripts/ci-dsh-integration.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, overrides, enabled ? [] : ['auto-approve']))}`
 
   let failed = false
@@ -467,11 +512,11 @@ async function main() {
 
 // ----------------------------------------------------------------- cases
 
-function configEntry(tree, id) {
+export function configEntry(tree, id) {
   return (Array.isArray(tree) ? tree : []).filter(entry => entry?.id === id)
 }
 
-function dumpConfig(options, env, cwd, parseYaml, file) {
+export function dumpConfig(options, env, cwd, parseYaml, file) {
   const dump = spawnSync(process.execPath, [options.dsh, '--profile', 'acp', '--dump-config'], { cwd, env, encoding: 'utf8', timeout: 120_000 })
   writeEvidence(file, dump.stdout ?? '')
   if (dump.status !== 0) throw new Error(`dsh --dump-config failed: ${dump.stderr}`)
@@ -479,7 +524,7 @@ function dumpConfig(options, env, cwd, parseYaml, file) {
 }
 
 /** One prompt in a fresh ACP session; the permission handler sees each request in order. */
-async function runCase(acp, { workspace, caseName, prompt, onPermission }) {
+export async function runCase(acp, { workspace, caseName, prompt, text = `[ci-case:${caseName}] ${prompt}`, onPermission }) {
   const permissions = []
   acp.onPermission(async params => {
     permissions.push(params)
@@ -487,22 +532,22 @@ async function runCase(acp, { workspace, caseName, prompt, onPermission }) {
   })
   const session = await acp.request('session/new', { cwd: workspace, mcpServers: [] })
   const firstUpdate = acp.updates.length
-  const response = await acp.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: `[ci-case:${caseName}] ${prompt}` }] })
+  const response = await acp.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text }] })
   const updates = acp.updates.slice(firstUpdate).filter(update => update.sessionId === session.sessionId)
   await acp.request('session/close', { sessionId: session.sessionId }).catch(() => undefined)
   return { sessionId: session.sessionId, response, permissions, updates }
 }
 
-function sessionEvents(dshHome, sessionId) {
+export function sessionEvents(dshHome, sessionId) {
   return readSessionLogs(dshHome).filter(event => event.file.includes(sessionId))
 }
 
-function eventData(event) {
+export function eventData(event) {
   return event.data ?? event.payload ?? event
 }
 
 /** Bind each approval to exactly one tool call with the scripted arguments, and return the decided outcomes. */
-function approvalChain(dshHome, sessionId) {
+export function approvalChain(dshHome, sessionId) {
   const events = sessionEvents(dshHome, sessionId)
   const calls = events.filter(event => event.type === 'tool/call').map(eventData)
   const asked = events.filter(event => event.type === 'approval/asked').map(eventData)
@@ -510,7 +555,7 @@ function approvalChain(dshHome, sessionId) {
   return { events, calls, asked, decided }
 }
 
-function checkBinding(caseName, chain, permissions, toolName, expectedArguments, expectedOutcome) {
+export function checkBinding(caseName, chain, permissions, toolName, expectedArguments, expectedOutcome) {
   check(caseName, `exactly one native approval/asked for ${toolName}`, chain.asked.length === 1 && chain.asked[0].toolName === toolName, chain.asked)
   const ask = chain.asked[0] ?? {}
   const call = chain.calls.filter(item => item.callId === ask.callId)
@@ -523,16 +568,16 @@ function checkBinding(caseName, chain, permissions, toolName, expectedArguments,
   check(caseName, `native approval/decided outcome is ${expectedOutcome}`, chain.decided.length === 1 && chain.decided[0].id === ask.id && chain.decided[0].outcome === expectedOutcome, chain.decided)
 }
 
-function classifierCalls(model, caseName) {
+export function classifierCalls(model, caseName) {
   return model.log.filter(entry => entry.kind === 'classifier' && entry.case === caseName)
 }
 
-function lastToolResults(model, caseName) {
+export function lastToolResults(model, caseName) {
   const agentTurns = model.log.filter(entry => entry.kind === 'agent' && entry.case === caseName)
   return agentTurns.at(-1)?.toolResults ?? []
 }
 
-const reject = () => ({ outcome: { outcome: 'selected', optionId: 'reject-once' } })
+export const reject = () => ({ outcome: { outcome: 'selected', optionId: 'reject-once' } })
 
 async function enabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {
   const phase = 'config'
@@ -691,10 +736,13 @@ async function disabledPhase({ options, model, baseEnv, dshHome, workspace, outs
   return ok
 }
 
-main().catch(error => {
-  console.error(error?.stack ?? error)
-  if (evidenceDir !== undefined) {
-    try { writeEvidence('assertions.json', { passed: false, error: String(error?.stack ?? error), results }) } catch { /* best effort */ }
-  }
-  process.exitCode = 1
-})
+// Run only as a script; scripts/ci-dsh-live.mjs imports the helpers above.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(canonical(process.argv[1])).href) {
+  main().catch(error => {
+    console.error(error?.stack ?? error)
+    if (evidenceDir !== undefined) {
+      try { writeEvidence('assertions.json', { passed: false, error: String(error?.stack ?? error), results }) } catch { /* best effort */ }
+    }
+    process.exitCode = 1
+  })
+}

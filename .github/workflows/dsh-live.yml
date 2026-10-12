@@ -1,0 +1,64 @@
+name: DSH Live Approval
+
+# Real-model shadow check: the plugin's classifier calls OpenCode Go
+# (opencode-go / deepseek-v4.1-flash) behind the pinned DSH ACP host, while
+# shadowMode stays on and every escalation is rejected. Manual dispatch on
+# main only; the API key is never available to pull requests or forks.
+# See scripts/ci-dsh-live.mjs for the cases and the redacted summary.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-live
+  cancel-in-progress: false
+
+jobs:
+  live-shadow:
+    name: live-shadow (DSH 0.2.0-rc.2, opencode-go/deepseek-v4.1-flash)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Put OPENCODE_GO_API_KEY on this environment and restrict it to main.
+    environment: dsh-live
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      # Timeout, model error and malformed-reply handoffs stay offline fault
+      # injection, so the live run spends no API quota on them.
+      - name: Offline approval tests
+        run: npm test
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      - name: Live classifier test
+        env:
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+        run: |
+          test -n "${OPENCODE_GO_API_KEY:-}" || { echo "::error::OPENCODE_GO_API_KEY is not configured"; exit 1; }
+          node scripts/ci-dsh-live.mjs \
+            --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+            --root "$RUNNER_TEMP/dsh-live" \
+            --evidence "$RUNNER_TEMP/dsh-live-summary"
+      # Redacted summary only; raw transcripts, session logs and stderr stay
+      # under $RUNNER_TEMP/dsh-live and are discarded with the runner.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-live-summary
+          path: ${{ runner.temp }}/dsh-live-summary
+          retention-days: 7
+          if-no-files-found: error
