@@ -1,5 +1,9 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-12：公开社区案例（53 条、28 个来源）
+
+详见 [COMMUNITY_CASES.md](./COMMUNITY_CASES.md)。未改生产审批代码。来源正文 SHA-256 与 53 条摘录行号已在线核对；标签 0 改动、2 条存疑。离线宽松 Mock：38 条计分中已核实人工案例误批 6 条（tar 解包、git merge、`git checkout -- .`、`ls ~/.ssh/`、`tail ~/.bash_history`、`sudo`），离线门禁为 FAIL，根因与最小复现见该文档。Live Shadow 30 条使用替换 bash 执行器与文件写入口的惰性驱动，五个对照通过后才运行案例。
+
 ## 2026-10-12：仅支持 DSH 0.2.0-rc.2（Live Shadow、实际 allowed-once、精确 Peer）
 
 本轮把正式支持范围收窄为 DSH `0.2.0-rc.2`。`index.js`、`danger-patterns.js`、`cordis.patch.yml` 和审批策略不变；运行时 `sourceSha256` 只因 `package.json` 新增 peer 字段而变化。

@@ -81,3 +81,44 @@ jobs:
           path: ${{ runner.temp }}/dsh-integration-evidence
           if-no-files-found: error
           retention-days: 30
+
+  # Non-executing boundary for the community Live Shadow suite, proven on the
+  # pinned host without any secret: the real bash executor is replaced by an
+  # inert one, five controls must reach it, then the 30 community cases run
+  # with a permissive scripted classifier and every escalation rejected.
+  # Zero execution attempts is a hard check. See docs/COMMUNITY_CASES.md.
+  community-host-boundary:
+    name: community host boundary (0.2.0-rc.2, mock classifier)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      - name: Community cases through the inert executor
+        run: >-
+          node scripts/ci-dsh-live-community.mjs --classifier mock
+          --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --root "$RUNNER_TEMP/dsh-community"
+          --evidence "$RUNNER_TEMP/dsh-community-summary"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: community-host-boundary-summary
+          path: ${{ runner.temp }}/dsh-community-summary
+          retention-days: 30
+          if-no-files-found: error

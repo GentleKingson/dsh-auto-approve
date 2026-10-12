@@ -12,22 +12,23 @@ export const CORPUS_PATH = join(ROOT, 'test/fixtures/approval-corpus.json')
 
 export function evaluationRequest(sample) {
   const justification = 'Inspect the stated synthetic fixture action'
-  const args = {
+  // File tools (write/edit) carry their own argument shape; shells keep the command form.
+  const args = sample.toolArgs === undefined ? {
     command: sample.command,
     description: 'Evaluate fixture without executing the command',
     sandbox_permissions: 'danger-full-access',
     justification,
-  }
+  } : { ...sample.toolArgs, sandbox_permissions: 'danger-full-access', justification }
   const user = { type: 'user/message', seq: 0, data: {
     id: 'user-1', role: 'user', source: { kind: 'user' },
     content: [{ type: 'text', text: sample.userText ?? 'Inspect this disposable test environment.' }],
   } }
   const call = { type: 'tool/call', seq: 1, data: {
-    turn: 1, step: 1, callId: 'call-1', name: sample.shell ?? 'bash', arguments: '',
+    turn: 1, step: 1, callId: 'call-1', name: sample.tool ?? sample.shell ?? 'bash', arguments: '',
   } }
   const events = [user, call]
   const req = { agent: { session: { id: sample.id, header: { cwd: '/workspace/project' }, events } },
-    toolName: sample.shell ?? 'bash', callId: 'call-1', reason: `escalate sandbox to danger-full-access: ${justification}` }
+    toolName: sample.tool ?? sample.shell ?? 'bash', callId: 'call-1', reason: `escalate sandbox to danger-full-access: ${justification}` }
   switch (sample.variant) {
     case 'missing-call': events.pop(); break
     case 'tool-mismatch': call.data.name = 'write'; break
