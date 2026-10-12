@@ -429,8 +429,8 @@ export function hostEnv(dshHome) {
 }
 
 /** Install a local package through the host's own plugin manager. */
-export function installLinkedPlugin(options, cwd, env, dir, logName) {
-  const install = spawnSync(process.execPath, [options.dsh, 'plugin', '--profile', 'acp', 'add', `link:${dir}`], { cwd, env, encoding: 'utf8', timeout: 300_000 })
+export function installLinkedPlugin(options, cwd, env, dir, logName, profile = 'acp') {
+  const install = spawnSync(process.execPath, [options.dsh, 'plugin', '--profile', profile, 'add', `link:${dir}`], { cwd, env, encoding: 'utf8', timeout: 300_000 })
   writeEvidence(logName, `${install.stdout ?? ''}\n${install.stderr ?? ''}`)
   if (install.status !== 0) throw new Error(`dsh plugin add ${dir} failed with status ${install.status}; see ${logName}`)
 }
@@ -534,8 +534,8 @@ export function configEntry(tree, id) {
   return (Array.isArray(tree) ? tree : []).filter(entry => entry?.id === id)
 }
 
-export function dumpConfig(options, env, cwd, parseYaml, file) {
-  const dump = spawnSync(process.execPath, [options.dsh, '--profile', 'acp', '--dump-config'], { cwd, env, encoding: 'utf8', timeout: 120_000 })
+export function dumpConfig(options, env, cwd, parseYaml, file, profile = 'acp') {
+  const dump = spawnSync(process.execPath, [options.dsh, '--profile', profile, '--dump-config'], { cwd, env, encoding: 'utf8', timeout: 120_000 })
   writeEvidence(file, dump.stdout ?? '')
   if (dump.status !== 0) throw new Error(`dsh --dump-config failed: ${dump.stderr}`)
   return parseYaml(dump.stdout)

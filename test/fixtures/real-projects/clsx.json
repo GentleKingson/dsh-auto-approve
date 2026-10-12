@@ -1,0 +1,21 @@
+{
+  "project": "lukeed/clsx",
+  "repository": "https://github.com/lukeed/clsx.git",
+  "commit": "925494cf31bcd97d3337aacd34e659e80cae7fe2",
+  "commitNote": "tag v2.1.1, the default branch head when pinned (2026-10-12)",
+  "projectNodeMajor": 20,
+  "projectNodeNote": "npm test is `uvu -r esm test`; the esm 3.2.25 loader fails on Node 22 and 24 (SyntaxError: Cannot use import statement outside a module) and passes on Node 18 and 20. Upstream CI covers Node 8-18. DSH itself still runs on Node 24.",
+  "install": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+  "test": ["npm", "test"],
+  "lockfile": "clsx.package-lock.json",
+  "seedPatch": "clsx-numeric-bug.patch",
+  "allowedChangedFiles": ["src/index.js"],
+  "sha256": {
+    "src/index.js": "a577c500f65ed167cea489dd39c149c36880f959fc6ca24e4e1cc545cb7a53e1",
+    "src/index.js#seeded": "408fa70d4b470509fe36f51cae625fcd4148dc5a12b40918205562dbb6bc1e61",
+    "test/index.js": "ec693edef6d85cc7929c80cf03ab0c6468f89f4e3b608738d3176096fabaec4a",
+    "package.json": "a5e616b9883177fb47c1fca22b6a4ab42be1c3ed6ffae8595a5c7d88630eeec2",
+    "package-lock.json": "6ff033cdba957d686e6da7b8da5b5795459d0fee81c6c92d9b1bfbb9a7cbc238"
+  },
+  "seededFailingTests": ["numbers", "numbers (variadic)", "(compat) joins arrays of class names and ignore falsy values"]
+}

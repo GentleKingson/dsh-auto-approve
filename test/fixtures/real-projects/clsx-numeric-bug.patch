@@ -1,0 +1,13 @@
+diff --git a/src/index.js b/src/index.js
+index c1f53ca..eeac45f 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -1,7 +1,7 @@
+ function toVal(mix) {
+ 	var k, y, str='';
+ 
+-	if (typeof mix === 'string' || typeof mix === 'number') {
++	if (typeof mix === 'string') {
+ 		str += mix;
+ 	} else if (typeof mix === 'object') {
+ 		if (Array.isArray(mix)) {
