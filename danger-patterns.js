@@ -21,7 +21,7 @@ export const DEFAULT_DANGER_PATTERNS = Object.freeze([
   '(?=[^\\n]*\\b(?:rm|dd|mkfs(?:\\.[a-z0-9_-]+)?|chmod|chown)\\b)(?=[^\\n]*(?:\\$\\(|`|<\\())',
 ])
 
-export const POLICY_VERSION = 'approval-v5'
+export const POLICY_VERSION = 'approval-v6'
 
 /** A complete, deliberately tiny PowerShell grammar. The only compound form is
  * one static command followed by an exit-code check that emits one literal.
@@ -158,13 +158,13 @@ export function simpleCommandWords(command) {
 
 export function sensitivePath(path) {
   const target = policyPath(path)
-  return /(?:^|\/)(?:\.ssh\/(?:id_[^/]+|config)|\.aws\/credentials|\.env(?:\.[^/]*)?|\.npmrc|\.netrc|\.git-credentials|[^/]*\.(?:pem|key)|credentials(?:\.json)?)(?:$|\/)/i.test(target)
+  return /(?:^|\/)(?:\.ssh|\.gnupg|\.aws\/credentials|\.env(?:\.[^/]*)?|\.npmrc|\.netrc|\.git-credentials|[^/]*\.(?:pem|key)|credentials(?:\.json)?|\.[a-z_]*_history|fish_history)(?:$|\/)/i.test(target)
     || /^\/(?:etc\/shadow|proc\/(?:self|\d+)\/environ)$/.test(target)
 }
 
 export function securityTarget(path) {
   path = policyPath(path)
-  return /(?:^|\/)(?:\.dsh|\.config\/dsh)(?:\/|$)|(?:^|\/)(?:\.bashrc|\.bash_profile|\.zshrc|\.profile)$|\/(?:LaunchAgents|LaunchDaemons)\//i.test(path)
+  return /(?:^|\/)(?:\.dsh|\.config\/dsh|\.claude)(?:\/|$)|(?:^|\/)(?:\.bashrc|\.bash_profile|\.zshrc|\.profile)$|\/(?:LaunchAgents|LaunchDaemons)\//i.test(path)
     || /^\/(?:etc|usr|System|Library)(?:\/|$)/.test(path)
     || /^(?:[a-z]:)?\/(?:windows|program files(?: \(x86\))?|programdata)(?:\/|$)/i.test(path)
     || /\/appdata\/(?:local|roaming)\/dsh(?:\/|$)/i.test(path)
@@ -204,12 +204,8 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
   }
   if (words[0] === 'echo') return result(undefined, 'low', true)
   if (executable !== 'printf' && args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])) return result()
-  if (executable === 'sudo') {
-    if (args.length === 0 || args[0].startsWith('-')) return result('uncertain')
-    executable = args[0].split('/').at(-1)
-    args = args.slice(1)
-    if (executable === 'sudo') return result('uncertain')
-  }
+  // Privilege elevation is never a routine action, whatever the inner command.
+  if (['sudo', 'doas', 'su'].includes(executable)) return result('security-config')
   // Wrapper execution and environment indirection do not establish the
   // underlying action's identity in this bounded reader.
   if (['env', 'command', 'builtin', 'busybox', 'xargs', 'nice', 'nohup', 'timeout'].includes(executable)
@@ -257,7 +253,9 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     }
   }
   if (outputs.some(path => securityTarget(resolve(workdir, path)) || securityTarget(path))) return result('security-config')
-  if (['cat', 'head', 'tail', 'grep', 'rg', 'cp', 'scp', 'rsync'].includes(executable) && args.some(arg => sensitivePath(arg) || sensitivePath(resolve(workdir, arg)))) return result('credentials')
+  // Extraction into the working tree silently overwrites existing files.
+  if (extractsArchive || (executable === 'unzip' && outputs.length > 0)) return result(undefined, 'medium')
+  if (['cat', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'ls', 'find', 'stat', 'file', 'strings', 'xxd', 'od', 'base64', 'diff', 'tar', 'zip', 'cp', 'scp', 'rsync'].includes(executable) && args.some(arg => sensitivePath(arg) || sensitivePath(resolve(workdir, arg)))) return result('credentials')
   if (executable === 'rm') {
     const targets = args.filter(arg => !arg.startsWith('-'))
     if (targets.length === 0 || targets.some(arg => /^(?:\/|~|\.\.(?:\/|$))/.test(arg))) return result('destructive')
@@ -310,6 +308,14 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
       return result(undefined, 'medium')
     }
     if (args[0] === 'branch' && args.includes('-D')) return result('destructive')
+    // Pathspec checkout, worktree restore and forced switches discard
+    // uncommitted changes, like reset --hard.
+    if (args[0] === 'checkout' && args.slice(1).some(arg => ['--', '.', '-f', '--force', '-p', '--patch'].includes(arg) || arg === '--no-overlay')) return result('destructive')
+    if (args[0] === 'restore' && !(args.slice(1).some(arg => ['-S', '--staged'].includes(arg)) && !args.slice(1).some(arg => ['-W', '--worktree'].includes(arg) || /^-[^-]*W/.test(arg)))) return result('destructive')
+    if (args[0] === 'switch' && args.slice(1).some(arg => ['-f', '--force', '--discard-changes'].includes(arg))) return result('destructive')
+    // Merges and rebases rewrite the working tree and branch history.
+    if (['merge', 'rebase', 'cherry-pick', 'revert', 'am', 'stash'].includes(args[0])
+      && !(args[0] === 'stash' && ['list', 'show'].includes(args[1]))) return result(undefined, 'medium')
   }
   if (['curl', 'wget'].includes(executable)) {
     const simpleFlags = executable === 'curl' ? /^-[fLsSkIvNq]+$/ : /^-[qspN]+$/

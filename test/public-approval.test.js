@@ -65,3 +65,19 @@ ConvertTo-Json -InputObject $results -Compress
   }))
   assert.deepEqual(actual, plans.map(p => [...p.words]))
 })
+
+test('community gaps: discards, elevation, credential listings and extraction never ride a low reply', () => {
+  const at = { workdir: '/workspace/project', shell: 'bash' }
+  for (const [command, reason] of [
+    ['git checkout -- .', 'destructive'], ['git checkout HEAD --', 'destructive'], ['git checkout main -- src', 'destructive'],
+    ['git checkout -f main', 'destructive'], ['git restore src/a.js', 'destructive'], ['git switch --discard-changes dev', 'destructive'],
+    ['sudo /usr/bin/id', 'security-config'], ['ls -la ~/.ssh/', 'credentials'], ['tail -100 ~/.bash_history', 'credentials'],
+    ['sed -i "" "s/v1/v2/" .claude/skills/test/SKILL.md', 'security-config'],
+  ]) assert.equal(inspectCommand(command, at).handoffReason, reason, command)
+  for (const command of ['git merge dev --no-ff', 'git rebase main', 'tar -xzf /tmp/test.tar.gz', 'unzip a.zip']) {
+    assert.deepEqual([inspectCommand(command, at).handoffReason, inspectCommand(command, at).minimumRisk], [undefined, 'medium'], command)
+  }
+  for (const command of ['git checkout main', 'git checkout -b topic', 'git restore --staged a.js', 'git switch dev', 'git stash list', 'tar -tzf a.tgz', 'ls -la']) {
+    assert.deepEqual([inspectCommand(command, at).handoffReason, inspectCommand(command, at).minimumRisk], [undefined, 'low'], command)
+  }
+})

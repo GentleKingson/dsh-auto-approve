@@ -552,7 +552,7 @@ test('approve is the only automatic approval exit', async () => {
     userMessages: [],
     minimumRisk: 'low',
     riskHints: [],
-    policyVersion: 'approval-v5',
+    policyVersion: 'approval-v6',
   })
   assert.match(
     app.lastLlmOptions.system,
