@@ -82,6 +82,37 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Safety regression gate for the 53 public community cases: the real
+  # approval handler with a permissive low/approve mock. A verified
+  # manual_required case approved as allowed-once fails this job; labels and
+  # danger rules are never relaxed to clear it. Not a model-accuracy metric.
+  community-offline:
+    name: community offline gate (permissive mock)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Replay community cases
+        run: |
+          mkdir -p "$RUNNER_TEMP/community"
+          set -o pipefail
+          node scripts/evaluate-community-cases.mjs | tee "$RUNNER_TEMP/community/community-offline.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: community-offline-report
+          path: ${{ runner.temp }}/community
+          retention-days: 30
+          if-no-files-found: error
+
   # Non-executing boundary for the community Live Shadow suite, proven on the
   # pinned host without any secret: the real bash executor is replaced by an
   # inert one, five controls must reach it, then the 30 community cases run
