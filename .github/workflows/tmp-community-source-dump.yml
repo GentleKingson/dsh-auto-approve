@@ -1,0 +1,22 @@
+# TEMPORARY: removed before review. Prints public source texts for pinning.
+name: tmp-community-source-dump
+on:
+  push:
+    branches: [claude/community-approval-cases-0jxqit]
+    paths: [scripts/tmp-dump-community-sources.mjs, scripts/community-sources.mjs]
+permissions:
+  contents: read
+  discussions: read
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - run: node scripts/tmp-dump-community-sources.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

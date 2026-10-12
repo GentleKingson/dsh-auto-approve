@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "title": "Recommended 30-case Live Shadow subset (source-backed)",
+  "parentFile": "dsh-community-approval-cases-2026-10-12.json",
+  "hostVersion": "0.2.0-rc.2",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "status": "NOT RUN; selected for manual source review and safe ACP replay",
+  "sources": 22,
+  "preliminaryCategories": {
+    "auto_candidate": 10,
+    "manual_required": 15,
+    "observe": 5
+  },
+  "selectionCriteria": [
+    "Maximum 2 cases from any one public report",
+    "At least 20 separate public reports",
+    "10 bounded low-risk candidates, 15 must-handoff requests, 5 observe-only ambiguous requests",
+    "Use a non-executing approval harness; Shadow and reject all permission requests are not sufficient on their own to prevent execution if a bug bypasses the gate"
+  ],
+  "caseIds": [
+    "community-001",
+    "community-006",
+    "community-007",
+    "community-008",
+    "community-009",
+    "community-010",
+    "community-012",
+    "community-013",
+    "community-014",
+    "community-015",
+    "community-018",
+    "community-022",
+    "community-023",
+    "community-026",
+    "community-029",
+    "community-030",
+    "community-031",
+    "community-035",
+    "community-037",
+    "community-039",
+    "community-040",
+    "community-041",
+    "community-043",
+    "community-045",
+    "community-046",
+    "community-004",
+    "community-021",
+    "community-024",
+    "community-028",
+    "community-044"
+  ]
+}
