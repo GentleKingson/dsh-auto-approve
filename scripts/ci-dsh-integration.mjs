@@ -15,7 +15,7 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -388,7 +388,7 @@ export function hostVersions(dshPackageJson, model) {
   const dshRequire = createRequire(dshPackageJson)
   const git = args => spawnSync('git', args, { cwd: PLUGIN_DIR, encoding: 'utf8' }).stdout?.trim() ?? null
   const runtimeFiles = ['index.js', 'danger-patterns.js', 'cordis.patch.yml', 'package.json']
-  return {
+  const versions = {
     date: new Date().toISOString(),
     os: `${process.platform} ${process.arch}`,
     node: process.version,
@@ -405,6 +405,18 @@ export function hostVersions(dshPackageJson, model) {
       sourceSha256: sha256(JSON.stringify(runtimeFiles.map(file => [file, readFileSync(join(PLUGIN_DIR, file), 'utf8')]))),
     },
     model,
+  }
+  // pi-ai does not export its package.json; find the copy dsh-llm-pi-ai actually resolves.
+  versions.hostPackages['@earendil-works/pi-ai'] = installedVersion(dshRequire.resolve('@deepseek-ai/dsh-llm-pi-ai'), '@earendil-works/pi-ai')
+  return versions
+}
+
+/** Version of the package Node would resolve by name from a file, read from its node_modules directory. */
+export function installedVersion(fromFile, name) {
+  for (let dir = dirname(canonical(fromFile)); ; dir = dirname(dir)) {
+    const manifest = join(dir, 'node_modules', name, 'package.json')
+    if (existsSync(manifest)) return JSON.parse(readFileSync(manifest, 'utf8')).version ?? null
+    if (dirname(dir) === dir) return null
   }
 }
 
@@ -461,7 +473,7 @@ async function main() {
   const parseYaml = yamlCodec.parse
   const versions = hostVersions(dshPackageJson, { provider: MODEL_PROVIDER, model: MODEL_ID, note: 'scripted local endpoint; not a real model' })
   writeEvidence('versions.json', versions)
-  console.log(`dsh ${versions.dsh}; plugin ${versions.plugin.version} @ ${versions.plugin.prHead ?? versions.plugin.checkoutHead} (checkout ${versions.plugin.checkoutHead}); ${versions.node}`)
+  console.log(`dsh ${versions.dsh}; pi-ai ${versions.hostPackages['@earendil-works/pi-ai']}; plugin ${versions.plugin.version} @ ${versions.plugin.prHead ?? versions.plugin.checkoutHead} (checkout ${versions.plugin.checkoutHead}); ${versions.node}`)
 
   const baseEnv = hostEnv(dshHome)
 
@@ -474,15 +486,21 @@ async function main() {
   const patchFile = join(profileDir, 'cordis.patch.yml')
   let defaultTree
   const overrides = mockOverrides(port)
-  const patch = enabled => `# Written by scripts/ci-dsh-integration.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, overrides, enabled ? [] : ['auto-approve']))}`
+  const patch = (enabled, extra = {}) => `# Written by scripts/ci-dsh-integration.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, deepMerge(overrides, extra), enabled ? [] : ['auto-approve']))}`
+  // Actual automatic approval: the scripted classifier is the only model, so no real credential is in this host.
+  const autoPatch = () => patch(true, { 'auto-approve': { shadowMode: false } })
 
   let failed = false
   try {
+    failed = !versionGatePhase({ options, root, versions }) || failed
     writeFileSync(patchFile, '[]\n')
     defaultTree = dumpConfig(options, baseEnv, workspace, parseYaml, 'composed-config-before-user-patch.yml')
     writeFileSync(patchFile, patch(true))
     writeEvidence('cordis.patch.enabled.yml', patch(true))
     failed = !(await enabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
+    writeFileSync(patchFile, autoPatch())
+    writeEvidence('cordis.patch.auto.yml', autoPatch())
+    failed = !(await autoPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
     writeFileSync(patchFile, patch(false))
     writeEvidence('cordis.patch.disabled.yml', patch(false))
     failed = !(await disabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
@@ -500,7 +518,7 @@ async function main() {
   const summary = {
     passed: !failed && results.length > 0 && results.every(result => result.passed),
     scope: 'GitHub Actions Linux + ACP covered host-integration items; model responses are scripted (not real model accuracy)',
-    notVerified: ['Web/Desktop/TUI clients', 'deployed control-plane isolation', 'genuine human approval provenance', 'real model behaviour', 'actual automatic approval (shadowMode stays on)'],
+    notVerified: ['Web/Desktop/TUI clients', 'deployed control-plane isolation', 'genuine human approval provenance', 'real model behaviour (see scripts/ci-dsh-live.mjs)', 'automatic approval driven by a real model'],
     total: results.length,
     failed: results.filter(result => !result.passed).length,
     results,
@@ -544,6 +562,56 @@ export function sessionEvents(dshHome, sessionId) {
 
 export function eventData(event) {
   return event.data ?? event.payload ?? event
+}
+
+const INCOMPATIBLE_DSH = '0.0.0-ci-incompatible'
+
+/**
+ * Host identity and the exact dsh peer. The host's own compatibility check
+ * must refuse to install, and refuse to load at startup, a copy of this
+ * plugin whose @deepseek-ai/dsh peer does not match the running host.
+ * Uses a separate DSH_HOME so the main profile is untouched.
+ */
+function versionGatePhase({ options, root, versions }) {
+  const phase = 'version-gate'
+  const manifest = JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8'))
+  const expected = process.env.DSH_VERSION
+  check(phase, 'host is the pinned DSH_VERSION', expected === undefined || versions.dsh === expected, { host: versions.dsh, expected })
+  check(phase, 'plugin peer @deepseek-ai/dsh is exactly the running host version', manifest.peerDependencies?.['@deepseek-ai/dsh'] === versions.dsh, manifest.peerDependencies)
+  check(phase, 'dsh peer is optional for npm installs', manifest.peerDependenciesMeta?.['@deepseek-ai/dsh']?.optional === true, manifest.peerDependenciesMeta)
+  check(phase, 'resolved pi-ai version recorded', typeof versions.hostPackages['@earendil-works/pi-ai'] === 'string', versions.hostPackages)
+
+  const gateHome = join(root, 'gate-home')
+  const copy = join(root, 'gate-plugin')
+  const env = hostEnv(gateHome)
+  try {
+    mkdirSync(copy, { recursive: true })
+    for (const file of manifest.files.filter(file => !file.startsWith('test/') && !['docs', 'scripts', 'README.md', 'README_EN.md'].includes(file))) cpSync(join(PLUGIN_DIR, file), join(copy, file), { recursive: true })
+    symlinkSync(join(PLUGIN_DIR, 'node_modules'), join(copy, 'node_modules'), 'dir')
+    const writePeer = range => writeFileSync(join(copy, 'package.json'), `${JSON.stringify({ ...manifest, peerDependencies: { ...manifest.peerDependencies, '@deepseek-ai/dsh': range } }, null, 2)}\n`)
+    const dsh = (args, log) => {
+      const result = spawnSync(process.execPath, [options.dsh, ...args], { cwd: root, env, encoding: 'utf8', timeout: 300_000 })
+      writeEvidence(log, `status=${result.status}\n${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+      return result
+    }
+    const composed = dump => /^\s*name: dsh-auto-approve$/m.test(dump.stdout ?? '')
+
+    writePeer(INCOMPATIBLE_DSH)
+    const refused = dsh(['plugin', '--profile', 'acp', 'add', `link:${copy}`], 'version-gate-install-incompatible.log')
+    check(phase, 'host refuses to install a copy whose dsh peer does not match', refused.status !== 0 && /installation rejected/.test(refused.stderr) && /is incompatible with dsh/.test(refused.stderr), { status: refused.status, stderr: refused.stderr.split('\n').slice(0, 5) })
+
+    writePeer(versions.dsh)
+    const accepted = dsh(['plugin', '--profile', 'acp', 'add', `link:${copy}`], 'version-gate-install-exact.log')
+    const loaded = dsh(['--profile', 'acp', '--dump-config'], 'version-gate-dump-exact.log')
+    check(phase, 'host installs and composes the copy with the exact dsh peer', accepted.status === 0 && loaded.status === 0 && composed(loaded), { install: accepted.status, dump: loaded.status })
+
+    writePeer(INCOMPATIBLE_DSH)
+    const skipped = dsh(['--profile', 'acp', '--dump-config'], 'version-gate-dump-incompatible.log')
+    check(phase, 'host skips the installed copy at startup once its dsh peer stops matching', skipped.status === 0 && !composed(skipped) && /skipping profile bundle "dsh-auto-approve"/.test(skipped.stderr) && /is incompatible with dsh/.test(skipped.stderr), { status: skipped.status, stderr: skipped.stderr.split('\n').slice(0, 5) })
+  } catch (error) {
+    check(phase, 'version gate phase ran to completion', false, String(error?.stack ?? error))
+  }
+  return results.filter(result => result.case === phase).every(result => result.passed)
 }
 
 /** Bind each approval to exactly one tool call with the scripted arguments, and return the decided outcomes. */
@@ -703,6 +771,63 @@ async function enabledPhase({ options, model, baseEnv, dshHome, workspace, outsi
     check('cancel-pending', 'dsh process exited after stdin closed', exit.exitedCleanly, exit)
     // Re-check after the process is gone: nothing ran late.
     check('cancel-pending', 'target still absent after process exit', !existsSync(join(outside, 'cancel-target.txt')))
+  }
+  return ok
+}
+
+async function autoPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {
+  const phase = 'auto-config'
+  const tree = dumpConfig(options, baseEnv, workspace, parseYaml, 'effective-config-auto.yml')
+  const plugins = (Array.isArray(tree) ? tree : []).filter(entry => entry?.name === 'dsh-auto-approve')
+  const pluginConfig = plugins[0]?.config ?? {}
+  check(phase, 'effective plugin config: shadowMode false, sessionMemory false, approval policy ask', plugins.length === 1 && plugins[0].disabled !== true && pluginConfig.shadowMode === false && pluginConfig.sessionMemory === false && configEntry(tree, 'approval')[0]?.config?.policy === 'ask', { plugin: pluginConfig, approval: configEntry(tree, 'approval') })
+
+  const acp = startAcp({ dsh: options.dsh, cwd: workspace, env: baseEnv, stderrPath: join(evidenceDir, 'dsh-auto.stderr.log'), label: 'auto' })
+  let ok = true
+  try {
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
+
+    // -- low/approve with shadow off: the plugin answers allowed-once and the host runs the command.
+    {
+      const caseName = 'auto-allowed-once'
+      const target = join(outside, 'auto-allowed-once.txt')
+      const args = { command: `touch ${target}`, description: 'Create a marker file outside workspace', sandbox_permissions: 'danger-full-access', justification: 'CI integration check of an actual automatic approval.' }
+      model.script(caseName, [{ name: 'bash', arguments: args }], '{"risk":"low","verdict":"approve","reasonCode":"routine"}')
+      const run = await runCase(acp, { workspace, caseName, prompt: 'Create the marker file.', onPermission: reject })
+      const chain = approvalChain(dshHome, run.sessionId)
+      const classifier = classifierCalls(model, caseName)
+      check(caseName, 'plugin classifier ran exactly once with the bound tool arguments', classifier.length === 1 && classifier[0].toolName === 'bash' && classifier[0].toolArguments === JSON.stringify(args), classifier)
+      check(caseName, 'no ACP session/request_permission reached the client', run.permissions.length === 0, run.permissions)
+      check(caseName, 'exactly one native approval/asked for bash', chain.asked.length === 1 && chain.asked[0].toolName === 'bash', chain.asked)
+      const ask = chain.asked[0] ?? {}
+      const call = chain.calls.filter(item => item.callId === ask.callId)
+      check(caseName, 'approval callId binds to the scripted tool/call', call.length === 1 && call[0].arguments === JSON.stringify(args), { ask, calls: chain.calls })
+      check(caseName, 'native approval/decided outcome is allowed-once', chain.decided.length === 1 && chain.decided[0].id === ask.id && chain.decided[0].outcome === 'allowed-once', chain.decided)
+      check(caseName, 'the escalated command ran: target file exists', existsSync(target), lastToolResults(model, caseName))
+      check(caseName, 'prompt finished with end_turn', run.response?.stopReason === 'end_turn', run.response)
+    }
+
+    // -- high-risk command with shadow off: local rule hands off, the client rejects, nothing changes.
+    {
+      const caseName = 'auto-high-risk'
+      const important = join(outside, 'auto-important')
+      mkdirSync(important, { recursive: true })
+      writeFileSync(join(important, 'records.csv'), 'id,value\n1,keep\n')
+      const args = { command: `rm -rf ${important}`, description: 'Delete a directory outside workspace', sandbox_permissions: 'danger-full-access', justification: 'CI integration check of the manual fallback.' }
+      model.script(caseName, [{ name: 'bash', arguments: args }], '{"risk":"low","verdict":"approve","reasonCode":"routine"}')
+      const run = await runCase(acp, { workspace, caseName, prompt: 'Delete the directory.', onPermission: reject })
+      const chain = approvalChain(dshHome, run.sessionId)
+      check(caseName, 'local danger rule decided before any classifier request', classifierCalls(model, caseName).length === 0, classifierCalls(model, caseName))
+      checkBinding(caseName, chain, run.permissions, 'bash', args, 'rejected')
+      check(caseName, 'rejected deletion left the data in place', existsSync(join(important, 'records.csv')))
+    }
+  } catch (error) {
+    ok = check(phase, 'auto-approval phase ran to completion', false, String(error?.stack ?? error)) && ok
+  } finally {
+    const exit = await acp.shutdown()
+    writeEvidence('acp-auto.transcript.json', acp.transcript)
+    check(phase, 'every composed entry activated (no loader activation failures)', !/did not activate/.test(acp.stderr()), acp.stderr().split('\n').filter(line => /did not activate|Error/.test(line)).slice(0, 20))
+    check(phase, 'dsh process exited after stdin closed', exit.exitedCleanly, exit)
   }
   return ok
 }
