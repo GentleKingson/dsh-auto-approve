@@ -41,6 +41,32 @@ jobs:
       # This is adapter coverage, not a claim of Windows DSH ACL integration.
       - run: node --test test/windows-approval.test.js test/compile-evidence.test.js test/public-approval.test.js
 
+  # Community casebook (docs/COMMUNITY_CASES.md): offline handler replay with a
+  # permissive mock model. Fails when a verified manual_required case is
+  # approved. Kept out of `npm test` so the existing suites stay independent.
+  community-offline:
+    name: community offline mock gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Replay community cases (no command is executed)
+        run: |
+          mkdir -p "$RUNNER_TEMP/community"
+          node scripts/evaluate-community-cases.mjs | tee "$RUNNER_TEMP/community/community-offline.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: community-offline-report
+          path: ${{ runner.temp }}/community
+          retention-days: 30
+
   # Real-host integration on the one supported DSH release over ACP. Model
   # responses come from a local scripted endpoint; see docs/ACCEPTANCE.md for
   # scope. The script asserts the host is exactly DSH_VERSION and matches the
