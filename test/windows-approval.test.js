@@ -217,11 +217,38 @@ test('isolated Python compile writes cache but does not run source or cwd shadow
   try {
     await writeFile(join(dir, 'InvoiceTool.py'), 'raise RuntimeError("source must not execute")\n')
     await writeFile(join(dir, 'py_compile.py'), 'raise RuntimeError("cwd module must not load")\n')
-    execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-m', 'py_compile', 'InvoiceTool.py'], { cwd: dir, timeout: 15000 })
+    // CPython py_compile docs: explicit compilation writes a cache even when
+    // -B disables caches from imports. Exercise the exact P3 candidate flags.
+    execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-m', 'py_compile', 'InvoiceTool.py'], { cwd: dir, timeout: 15000 })
     const files = await readdir(join(dir, '__pycache__'))
     assert.equal(files.length, 1)
     assert.match(files[0], /^InvoiceTool\..*\.pyc$/)
     assert.match(await readFile(join(dir, 'InvoiceTool.py'), 'utf8'), /must not execute/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('CPython documented non-regular cache refusal preserves the existing target', async () => {
+  // Source: pinned CPython Doc/library/py_compile.rst in public corpus manifest.
+  const dir = await mkdtemp(join(tmpdir(), 'approval-cache-kind-'))
+  try {
+    const script = `import pathlib, py_compile
+source = pathlib.Path('InvoiceTool.py')
+source.write_text('raise RuntimeError("must not execute")\\n', encoding='utf-8')
+target = pathlib.Path('cache-target')
+target.mkdir()
+sentinel = target / 'keep.txt'
+sentinel.write_text('keep', encoding='utf-8')
+try:
+    py_compile.compile(str(source), cfile=str(target), doraise=True)
+except FileExistsError:
+    pass
+else:
+    raise AssertionError('non-regular output was accepted')
+assert sentinel.read_text(encoding='utf-8') == 'keep'
+`
+    execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-c', script], { cwd: dir, timeout: 15000 })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

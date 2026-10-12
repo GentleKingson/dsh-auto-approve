@@ -21,7 +21,7 @@ export const DEFAULT_DANGER_PATTERNS = Object.freeze([
   '(?=[^\\n]*\\b(?:rm|dd|mkfs(?:\\.[a-z0-9_-]+)?|chmod|chown)\\b)(?=[^\\n]*(?:\\$\\(|`|<\\())',
 ])
 
-export const POLICY_VERSION = 'approval-v4'
+export const POLICY_VERSION = 'approval-v5'
 
 /** A complete, deliberately tiny PowerShell grammar. The only compound form is
  * one static command followed by an exit-code check that emits one literal.
@@ -277,6 +277,30 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     if (args[0]?.startsWith('-')) return result('uncertain')
     if (['clone', 'checkout', 'switch', 'reset', 'clean', 'pull'].includes(args[0])
       && (securityTarget(workdir) || (args[0] === 'clone' && securityTarget(resolve(workdir, args.at(-1)))))) return result('security-config')
+    if (args[0] === 'reset') {
+      // Git accepts unambiguous long-option abbreviations. Other reset modes
+      // still change index/ref state and cannot rely on a low-risk reply.
+      const options = args.slice(1, args.includes('--') ? args.indexOf('--') : undefined)
+      if (options.some(arg => /^--ha(?:r(?:d)?)?$/.test(arg))) return result('destructive')
+      return result(undefined, 'medium')
+    }
+    if (args[0] === 'clean') {
+      // clean.requireForce=false permits deletion even without -f. Only a
+      // proven dry run is eligible; exclusion values and operands are not flags.
+      let dryRun = false
+      for (let index = 1; index < args.length; index++) {
+        const arg = args[index]
+        if (arg === '--') break
+        if (arg === '-e' || arg === '--exclude') {
+          if (++index >= args.length) return result('uncertain')
+        } else if (arg.startsWith('--exclude=') || /^-e./.test(arg)) continue
+        else if (arg === '--dry-run') dryRun = true
+        else if (/^-[dfnqxX]+$/.test(arg)) dryRun ||= arg.includes('n')
+        else if (['--force', '--quiet'].includes(arg)) continue
+        else if (arg.startsWith('-')) return result('uncertain')
+      }
+      return dryRun ? result() : result('destructive')
+    }
     if (args[0] === 'push') {
       const pushArgs = args.slice(1)
       if (pushArgs.some(arg => /^--(?:force(?:-|$)|mirror(?:=|$)|delete(?:=|$))|^-[a-z]*[fd][a-z]*$|^\+/.test(arg))) return result('shared-environment')

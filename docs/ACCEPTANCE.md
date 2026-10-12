@@ -255,3 +255,5 @@ node scripts/tune-from-logs.mjs /absolute/path/to/session.jsonl
 - test/index.test.js、test/tune-from-logs.test.js、test/fixtures/approval-corpus.json：边界、生命周期、协议、别名和固定对照语料。
 - package.json：将离线语料加入发布文件列表；依赖和版本未变。
 - README.md、README_EN.md、docs/ACCEPTANCE.md、三个指标 JSON：迁移、来源/沙箱边界、回滚、实测与未验证状态。
+
+公开资料驱动的补充回归：见 [PUBLIC_SOURCE_TESTING.md](PUBLIC_SOURCE_TESTING.md)。该语料独立于原有 140 条基准，包含来源固定、在线引文核验和 Windows 原生解析对照；不作为真实模型准确率或生产灰度证据。
