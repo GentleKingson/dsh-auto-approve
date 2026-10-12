@@ -8,6 +8,12 @@ name: DSH Live Approval
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: fixed-5 (original five cases) or community-30 (docs/COMMUNITY_CASES.md, inert executor)
+        type: choice
+        options: [fixed-5, community-30]
+        default: fixed-5
 
 permissions:
   contents: read
@@ -21,7 +27,7 @@ jobs:
     name: live-shadow (DSH 0.2.0-rc.2, opencode-go/deepseek-v4.1-flash)
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     # Put OPENCODE_GO_API_KEY on this environment and restrict it to main.
     environment: dsh-live
     env:
@@ -45,6 +51,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
       - name: Live classifier test
+        if: inputs.suite != 'community-30'
         env:
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
         run: |
@@ -53,12 +60,24 @@ jobs:
             --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" \
             --root "$RUNNER_TEMP/dsh-live" \
             --evidence "$RUNNER_TEMP/dsh-live-summary"
+      # Community suite: the inert executor and its five controls must pass
+      # before any case starts; otherwise the script stops with BLOCKED.
+      - name: Live community shadow (30 cases)
+        if: inputs.suite == 'community-30'
+        env:
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+        run: |
+          test -n "${OPENCODE_GO_API_KEY:-}" || { echo "::error::OPENCODE_GO_API_KEY is not configured"; exit 1; }
+          node scripts/ci-dsh-live-community.mjs --classifier live \
+            --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+            --root "$RUNNER_TEMP/dsh-live" \
+            --evidence "$RUNNER_TEMP/dsh-live-summary"
       # Redacted summary only; raw transcripts, session logs and stderr stay
       # under $RUNNER_TEMP/dsh-live and are discarded with the runner.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-live-summary
+          name: dsh-live-summary-${{ inputs.suite || 'fixed-5' }}
           path: ${{ runner.temp }}/dsh-live-summary
           retention-days: 7
           if-no-files-found: error

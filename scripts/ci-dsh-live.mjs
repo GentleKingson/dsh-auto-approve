@@ -22,6 +22,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   PLUGIN_DIR, approvalChain, check, checkBinding, classifierCalls, deepMerge, dshPackageJsonOf, dumpConfig,
   configEntry, createModelServer, hostEnv, hostVersions, installLinkedPlugin, loadYaml, mockOverrides,
@@ -29,13 +30,13 @@ import {
   startAcp, writeEvidence,
 } from './ci-dsh-integration.mjs'
 
-const EXPECTED_DSH = '0.2.0-rc.2'
-const LIVE_PROVIDER = 'opencode-go'
-const LIVE_MODEL = 'deepseek-v4.1-flash'
-const API_KEY_ENV = 'OPENCODE_GO_API_KEY'
-const OPENCODE_HOST = 'opencode.ai'
-const OPENCODE_PATH = '/zen/go/v1/chat/completions'
-const PROBE_NAME = 'dsh-ci-live-probe'
+export const EXPECTED_DSH = '0.2.0-rc.2'
+export const LIVE_PROVIDER = 'opencode-go'
+export const LIVE_MODEL = 'deepseek-v4.1-flash'
+export const API_KEY_ENV = 'OPENCODE_GO_API_KEY'
+export const OPENCODE_HOST = 'opencode.ai'
+export const OPENCODE_PATH = '/zen/go/v1/chat/completions'
+export const PROBE_NAME = 'dsh-ci-live-probe'
 
 /**
  * Incremental user-layer overrides merged over mockOverrides(): only the
@@ -43,7 +44,7 @@ const PROBE_NAME = 'dsh-ci-live-probe'
  * scripted ci-mock model; opencode-go keeps DSH's built-in API, endpoint,
  * model catalog and request headers.
  */
-const liveOverrides = {
+export const liveOverrides = {
   'auto-approve': {
     provider: LIVE_PROVIDER,
     model: LIVE_MODEL,
@@ -62,13 +63,13 @@ const liveOverrides = {
 }
 
 // Verdicts the plugin reports when the model call itself did not yield a usable answer.
-const MODEL_FAILURES = new Set(['timeout', 'llm-error', 'invalid-response', 'protocol-invalid', 'missing-finish', 'finish-max-tokens', 'finish-aborted', 'finish-error', 'finish-invalid', 'tool-call', 'response-too-long', 'no-default-model', 'llm-unavailable'])
+export const MODEL_FAILURES = new Set(['timeout', 'llm-error', 'invalid-response', 'protocol-invalid', 'missing-finish', 'finish-max-tokens', 'finish-aborted', 'finish-error', 'finish-invalid', 'tool-call', 'response-too-long', 'no-default-model', 'llm-unavailable'])
 
 // ------------------------------------------------------------- redaction
 
 const apiKey = process.env[API_KEY_ENV] ?? ''
 
-function redact(text) {
+export function redact(text) {
   let value = String(text)
   if (apiKey.length >= 8) value = value.split(apiKey).join('[REDACTED]')
   return value
@@ -76,7 +77,7 @@ function redact(text) {
     .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, '[REDACTED]')
 }
 
-function clip(value, max) {
+export function clip(value, max) {
   const text = redact(typeof value === 'string' ? value : JSON.stringify(value))
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
@@ -115,6 +116,7 @@ export function apply(ctx) {
     new Headers(init?.headers ?? {}).forEach((value, key) => headers.set(key, value))
     let model = null
     try { model = JSON.parse(typeof init?.body === 'string' ? init.body : 'null')?.model ?? null } catch {}
+    const started = Date.now()
     const row = {
       kind: 'http', host: url.hostname, path: url.pathname, method: init?.method ?? input?.method ?? 'GET', model,
       sessionHeaderSha256: headers.has('x-opencode-session') ? hash(headers.get('x-opencode-session')) : null,
@@ -129,6 +131,7 @@ export function apply(ctx) {
       row.error = String(error?.name ?? 'Error') + ': ' + String(error?.message ?? error).slice(0, 300)
       throw error
     } finally {
+      row.durationMs = Date.now() - started
       write(row)
     }
   }
@@ -137,14 +140,14 @@ export function apply(ctx) {
 }
 `
 
-function writeProbe(dir) {
+export function writeProbe(dir) {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: PROBE_NAME, version: '0.0.0', private: true, type: 'module', main: 'index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }, null, 2)}\n`)
   writeFileSync(join(dir, 'cordis.patch.yml'), `- insert:\n    - id: live-probe\n      name: ${PROBE_NAME}\n`)
   writeFileSync(join(dir, 'index.js'), PROBE_SOURCE)
 }
 
-function createProbeReader(file) {
+export function createProbeReader(file) {
   let offset = 0
   const all = []
   return {
@@ -163,7 +166,7 @@ function createProbeReader(file) {
   }
 }
 
-function parseDecision(text) {
+export function parseDecision(text) {
   const decision = /decision=([a-z-]+)/.exec(text)?.[1] ?? null
   const field = name => new RegExp(`\\b${name}=([A-Za-z0-9-]+)`).exec(text)?.[1] ?? null
   return { decision, verdict: field('verdict'), reasonCode: field('reasonCode'), decisionSource: field('decisionSource') }
@@ -423,7 +426,9 @@ async function main() {
   process.exitCode = ok ? 0 : 1
 }
 
-main().catch(error => {
-  console.error(redact(error?.stack ?? error))
-  process.exitCode = 1
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {
+    console.error(redact(error?.stack ?? error))
+    process.exitCode = 1
+  })
+}
