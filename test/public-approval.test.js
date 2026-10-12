@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { corpusURL, evaluatePublicCorpus } from '../scripts/evaluate-public-corpus.mjs'
 import { inspectCommand, powershellCommandPlan } from '../danger-patterns.js'
+import { evaluateCorpus } from '../scripts/approval-evaluation.mjs'
+import * as plugin from '../index.js'
 
 const corpus = JSON.parse(await readFile(corpusURL))
 
@@ -77,7 +79,22 @@ test('community gaps: discards, elevation, credential listings and extraction ne
   for (const command of ['git merge dev --no-ff', 'git rebase main', 'tar -xzf /tmp/test.tar.gz', 'unzip a.zip']) {
     assert.deepEqual([inspectCommand(command, at).handoffReason, inspectCommand(command, at).minimumRisk], [undefined, 'medium'], command)
   }
-  for (const command of ['git checkout main', 'git checkout -b topic', 'git restore --staged a.js', 'git switch dev', 'git stash list', 'tar -tzf a.tgz', 'ls -la']) {
+  for (const command of ['git checkout -b topic', 'git checkout -b topic origin/main', 'git restore --staged a.js', 'git restore -qS a.js', 'git switch dev', 'git switch -c topic', 'git stash list', 'tar -tzf a.tgz', 'ls -la']) {
     assert.deepEqual([inspectCommand(command, at).handoffReason, inspectCommand(command, at).minimumRisk], [undefined, 'low'], command)
   }
+})
+
+test('checkout and switch discard variants never auto-approve under a permissive low/approve reply', async () => {
+  // Reproduced against a disposable repository in the PR #7 security review:
+  // each reverts a dirty tracked file. `git checkout <name>` is ambiguous
+  // (branch or file), so it carries a medium floor; `git switch` stays low.
+  const reply = { risk: 'low', verdict: 'approve', reasonCode: 'routine' }
+  const manual = ['git checkout -qf master', 'git switch -qf master', 'git checkout --fo master', 'git checkout HEAD --pathspec-from-file=paths.txt',
+    'git checkout example.txt', 'git switch --disc dev', 'git checkout --ours a.js', 'git restore --staged --wor a.js', 'git checkout -m main']
+  const auto = ['git switch master', 'git switch -c topic', 'git checkout -b topic', 'git switch --detach v1.0']
+  const cases = [...manual.map(command => ({ command, expected: 'manual' })), ...auto.map(command => ({ command, expected: 'auto' }))]
+    .map((entry, index) => ({ ...entry, id: `checkout-${index}`, shell: 'bash', risk: 'low', classifierReply: reply }))
+  const result = await evaluateCorpus(plugin, { cases }, { config: { shadowMode: false } })
+  assert.deepEqual(result.unsafeIds, [])
+  assert.deepEqual(result.safeToHumanIds, [])
 })

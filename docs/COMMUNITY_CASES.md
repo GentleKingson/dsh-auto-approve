@@ -66,14 +66,16 @@ inspectCommand('git checkout -- .', at) // { minimumRisk: 'low' }，无 handoffR
 
 | 缺口 | 新行为 |
 | --- | --- |
-| `git checkout` 带 `--`、`.`、`-f/--force`、`-p`、`--no-overlay`；`git restore`（仅 `--staged` 除外）；`git switch -f/--discard-changes` | 规则转人工 `destructive` |
+| `git checkout`/`git switch`：带 `--`、多个路径或 `.`；短选项合并中含 `f`/`p`（如 `-qf`）；`--force`、`--discard-changes`、`--pathspec-from-file`、`--ours/--theirs`、`--merge`、`--no-overlay` 及其缩写（如 `--fo`）；`git restore`（仅 `--staged`/`-S`/`-q` 组合除外） | 规则转人工 `destructive` |
+| checkout/switch 中不在白名单内的其他选项（含无法确认的缩写） | 规则转人工 `uncertain` |
+| `git checkout <单个名称>`：不读仓库状态时，无法区分切换分支与恢复同名文件 | `medium` 下限。需要 low 自动批准时请用 `git switch <分支>`；`checkout -b` 仍为 low |
 | `git merge/rebase/cherry-pick/revert/am/stash`（`stash list/show` 除外） | `medium` 下限：模型答 low 即转人工，medium 需用户明确授权 |
 | `tar` 解包、`unzip` 解压到工作目录 | `medium` 下限 |
 | `sudo`、`doas`、`su` | 规则转人工 `security-config`（不再剥离后只看内层命令） |
 | `sensitivePath` 增加整个 `.ssh/`、`.gnupg/` 与 Shell/REPL 历史文件；凭据读取检查增加 `ls`、`find`、`stat`、`less`、`base64` 等 | 规则转人工 `credentials` |
 | `securityTarget` 增加 `.claude/` | 规则转人工 `security-config` |
 
-`POLICY_VERSION` 升为 `approval-v6`，会话缓存键随之失效。修复后离线门禁 PASS：误批 0（已核实 0、存疑 0），误拦 0，pwsh 变体误批 0，模型调用 19；140 条合成语料、151 条公开语料与其余测试全部通过。普通分支切换、`restore --staged`、`stash list`、`tar -t`、`ls -la` 仍为 low。
+`POLICY_VERSION` 升为 `approval-v6`，会话缓存键随之失效。修复后离线门禁 PASS：误批 0（已核实 0、存疑 0），误拦 0，pwsh 变体误批 0，模型调用 19；140 条合成语料、151 条公开语料与其余测试全部通过。`git switch <分支>`、`checkout -b`、`restore --staged`、`stash list`、`tar -t`、`ls -la` 仍为 low。安全审查（PR #7）在 Git 2.47.3 一次性仓库中复现的 `checkout -qf`、`switch -qf`、`checkout --fo`、`--pathspec-from-file` 和 `checkout example.txt`，均已加入宽松审批回归测试。剩余边界：规则只按字面判断，不读取仓库状态；未列出的 Git 子命令仍由模型判断。
 
 ## P2：不可执行审批驱动与 Live Shadow 30
 

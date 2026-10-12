@@ -308,11 +308,33 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
       return result(undefined, 'medium')
     }
     if (args[0] === 'branch' && args.includes('-D')) return result('destructive')
-    // Pathspec checkout, worktree restore and forced switches discard
-    // uncommitted changes, like reset --hard.
-    if (args[0] === 'checkout' && args.slice(1).some(arg => ['--', '.', '-f', '--force', '-p', '--patch'].includes(arg) || arg === '--no-overlay')) return result('destructive')
-    if (args[0] === 'restore' && !(args.slice(1).some(arg => ['-S', '--staged'].includes(arg)) && !args.slice(1).some(arg => ['-W', '--worktree'].includes(arg) || /^-[^-]*W/.test(arg)))) return result('destructive')
-    if (args[0] === 'switch' && args.slice(1).some(arg => ['-f', '--force', '--discard-changes'].includes(arg))) return result('destructive')
+    // Checkout, switch and restore can discard uncommitted changes. Git
+    // accepts bundled short options and long-option abbreviations, so only
+    // exact, known-safe options keep the low floor; anything else hands off.
+    if (['checkout', 'switch'].includes(args[0])) {
+      const safeLong = ['--quiet', '--no-progress', '--progress', '--track', '--no-track', '--guess', '--no-guess', '--detach', '--create', '--force-create', '--orphan']
+      const safeShort = args[0] === 'checkout' ? /^-[qbBtl]+$/ : /^-[qcCtd]+$/
+      const rest = args.slice(1)
+      const separator = rest.indexOf('--')
+      const options = rest.slice(0, separator < 0 ? undefined : separator).filter(arg => arg.startsWith('-'))
+      if (separator >= 0) return result('destructive')
+      if (options.some(arg => /^-[^-]*[fp]/.test(arg) || /^--(?:fo|pa|pathspec|disc|no-ov|ov|ours|theirs|merge|conflict)/.test(arg))) return result('destructive')
+      if (options.some(arg => !safeLong.includes(arg.split('=')[0]) && !safeShort.test(arg))) return result('uncertain')
+      const operands = rest.filter(arg => !arg.startsWith('-'))
+      const creates = options.some(arg => /^-[^-]*[bBcC]/.test(arg) || ['--create', '--force-create', '--orphan'].includes(arg))
+      if (args[0] === 'checkout') {
+        if (operands.includes('.') || operands.length > (creates ? 2 : 1)) return result('destructive')
+        // `git checkout <name>` is lexically a branch switch or a file
+        // restore. Without repository state it cannot be told apart, so a
+        // low reply never approves it; `git switch` stays low.
+        if (!creates && operands.length === 1) return result(undefined, 'medium')
+      }
+    }
+    if (args[0] === 'restore') {
+      const options = args.slice(1).filter(arg => arg.startsWith('-'))
+      const stagedOnly = options.some(arg => arg === '--staged' || /^-q*S[qS]*$/.test(arg)) && options.every(arg => ['--staged', '--quiet'].includes(arg) || /^-[qS]+$/.test(arg))
+      if (!stagedOnly) return result('destructive')
+    }
     // Merges and rebases rewrite the working tree and branch history.
     if (['merge', 'rebase', 'cherry-pick', 'revert', 'am', 'stash'].includes(args[0])
       && !(args[0] === 'stash' && ['list', 'show'].includes(args[1]))) return result(undefined, 'medium')
