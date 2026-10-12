@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { POLICY_VERSION } from '../danger-patterns.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const BASELINE_REF = 'c6d4222746fef089de4e40063d05d26a4191bc66'
@@ -138,7 +139,7 @@ export async function runEvaluation({ baseline = false, shadow = false } = {}) {
   }
   return { corpusVersion: corpus.version, corpusSha256: createHash('sha256').update(bytes).digest('hex'),
     codeRef, sourceSha256: createHash('sha256').update(JSON.stringify(sourceParts)).digest('hex'),
-    policyVersion: baseline ? 'legacy-v1' : 'approval-v2',
+    policyVersion: baseline ? 'legacy-v1' : POLICY_VERSION,
     workingTree: !baseline, shadowMode: shadow,
     latency: 'NOT_MEASURED: fixed mock responses', realLogs: 0, ...metrics }
 }

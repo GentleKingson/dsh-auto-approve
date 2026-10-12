@@ -1,4 +1,4 @@
-import { normalize, resolve } from 'node:path'
+import { normalize, resolve, win32 } from 'node:path'
 
 /**
  * Dependency-free built-in danger vocabulary shared by the runtime plugin and
@@ -21,7 +21,62 @@ export const DEFAULT_DANGER_PATTERNS = Object.freeze([
   '(?=[^\\n]*\\b(?:rm|dd|mkfs(?:\\.[a-z0-9_-]+)?|chmod|chown)\\b)(?=[^\\n]*(?:\\$\\(|`|<\\())',
 ])
 
-export const POLICY_VERSION = 'approval-v2'
+export const POLICY_VERSION = 'approval-v3'
+
+export function isShellTool(name) {
+  return name === 'bash' || name === 'pwsh'
+}
+
+/** Only static PowerShell words. No evaluation, interpolation, pipelines,
+ * calls via &, stop-parsing, quoted command names, or concatenated strings. */
+export function powershellCommandWords(command) {
+  // PowerShell also recognizes typographic quotes. Reject rather than guess
+  // their grouping. Empty native arguments differ between PS 5.1 and PS 7.
+  if (typeof command !== 'string' || /[\r\n\0\u2018\u2019\u201c\u201d]/.test(command)) return undefined
+  const words = []
+  let index = 0
+  while (index < command.length) {
+    while (/[ \t]/.test(command[index] ?? '') && index < command.length) index++
+    if (index === command.length) break
+    let word = ''
+    const quote = command[index] === "'" || command[index] === '"' ? command[index++] : undefined
+    if (quote && words.length === 0) return undefined
+    if (quote) {
+      while (index < command.length && command[index] !== quote) {
+        const char = command[index++]
+        if (quote === '"' && /[$`]/.test(char)) return undefined
+        word += char
+      }
+      if (command[index++] !== quote || (index < command.length && !/[ \t]/.test(command[index]))) return undefined
+    } else {
+      while (index < command.length && !/[ \t]/.test(command[index])) {
+        const char = command[index++]
+        if (/[\s\p{White_Space}'";&|<>$`(){}*?\[\]#,@]/u.test(char)) return undefined
+        word += char
+      }
+    }
+    if (word.length === 0 || word === '--%' || word === '--') return undefined
+    words.push(word)
+  }
+  return words.length ? words : undefined
+}
+
+export function commandWords(command, shell = 'bash') {
+  if (shell === 'pwsh') return powershellCommandWords(command)
+  return shell === 'bash' ? simpleCommandWords(command) : undefined
+}
+
+// Use Windows semantics for visibly Windows paths even during offline Linux
+// replay. This is lexical classification, never a realpath/junction guarantee.
+function policyPath(path) {
+  const windows = process.platform === 'win32' || /^[a-z]:|\\/i.test(path)
+  const target = (windows ? win32.normalize(path) : normalize(path)).replaceAll('\\', '/')
+  return windows ? target.split('/').map(part => part.replace(/[ .]+$/, '')).join('/') : target
+}
+
+export function unverifiedWindowsPath(path) {
+  return /^(?:\\\\|\/\/)|^[a-z]:(?![\\/])|^[a-z]:[\\/].*:/i.test(path)
+}
 
 /** A deliberately small word reader, not a shell parser. Reject composition,
  * expansion and escapes outside single quotes; unknown syntax goes to a human.
@@ -59,14 +114,17 @@ export function simpleCommandWords(command) {
 }
 
 export function sensitivePath(path) {
-  const target = normalize(path)
+  const target = policyPath(path)
   return /(?:^|\/)(?:\.ssh\/(?:id_[^/]+|config)|\.aws\/credentials|\.env(?:\.[^/]*)?|\.npmrc|\.netrc|\.git-credentials|[^/]*\.(?:pem|key)|credentials(?:\.json)?)(?:$|\/)/i.test(target)
     || /^\/(?:etc\/shadow|proc\/(?:self|\d+)\/environ)$/.test(target)
 }
 
 export function securityTarget(path) {
+  path = policyPath(path)
   return /(?:^|\/)(?:\.dsh|\.config\/dsh)(?:\/|$)|(?:^|\/)(?:\.bashrc|\.bash_profile|\.zshrc|\.profile)$|\/(?:LaunchAgents|LaunchDaemons)\//i.test(path)
     || /^\/(?:etc|usr|System|Library)(?:\/|$)/.test(path)
+    || /^(?:[a-z]:)?\/(?:windows|program files(?: \(x86\))?|programdata)(?:\/|$)/i.test(path)
+    || /\/appdata\/(?:local|roaming)\/dsh(?:\/|$)/i.test(path)
 }
 
 export function containsSecret(text) {
@@ -79,11 +137,28 @@ function result(handoffReason, minimumRisk = 'low', literalDisplay = false) {
 
 /** Non-overridable action guards. Configurable regexes are an additional layer.
  * This function never executes or predicts arbitrary code. */
-export function inspectCommand(command, { workdir = '/' } = {}) {
-  const words = simpleCommandWords(command)
-  if (words === undefined) return result('uncertain')
+export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) {
+  const words = commandWords(command, shell)
+  if (words === undefined) return result('unsupported-syntax')
   let args = words.slice(1)
   let executable = words[0].split('/').at(-1)
+  if (shell === 'pwsh') {
+    // Never borrow POSIX semantics for PowerShell aliases (rm, cat, curl,
+    // echo, etc.). Limit the first adapter to known native command families.
+    // Paths, cmdlets, aliases, script files and unknown executables stay manual.
+    if (/[\\/:]/.test(words[0])) return result('execution-environment-unverified')
+    executable = words[0].toLowerCase().replace(/\.exe$/, '')
+    if (!/^(?:git|python\d*(?:\.\d+)?|node|pwsh|powershell)$/.test(executable)) return result('unsupported-command')
+    if (args.some(sensitivePath)) return result('credentials')
+    if (args.some(securityTarget)) return result('security-config')
+    // Namespace paths, UNC, ADS and drive-relative paths are not proven local.
+    if (args.some(unverifiedWindowsPath)) return result('path-unverified')
+  }
+  if (/^python\d*(?:\.\d+)?$/.test(executable) && args.includes('py_compile') && args.includes('-m')) {
+    // Recognize the intent, but neither a module name nor -I/-S proves the
+    // executable identity, startup environment or bytecode output boundary.
+    return result('python-compile-environment-unverified')
+  }
   if (words[0] === 'echo') return result(undefined, 'low', true)
   if (executable !== 'printf' && args.length === 1 && ['--help', '-h', '--version', '-V'].includes(args[0])) return result()
   if (executable === 'sudo') {
@@ -186,7 +261,7 @@ export function inspectCommand(command, { workdir = '/' } = {}) {
   if (executable === 'kubectl' && args.includes('delete')) return result('shared-environment')
   if (executable === 'aws' && args.includes('rm')) return result('destructive')
   if (['eval', 'source', '.', 'ssh'].includes(executable)) return result('untrusted-execution')
-  if (/^(?:ba|z|da|k)?sh$|^(?:python\d*(?:\.\d+)?|node|perl|ruby)$/.test(executable)) return result('untrusted-execution')
+  if (/^(?:ba|z|da|k)?sh$|^(?:python\d*(?:\.\d+)?|node|perl|ruby|pwsh|powershell|cmd)(?:\.exe)?$/.test(executable)) return result('untrusted-execution')
   if (['npm', 'pnpm', 'yarn'].includes(executable)) {
     if (args[0] === 'publish') return result('shared-environment')
     if (['install', 'i', 'add', 'update'].includes(args[0]) && args.some(arg => /^--global(?:=|$)|^-[a-z]*g[a-z]*$/.test(arg))) return result('persistence')

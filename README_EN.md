@@ -228,6 +228,16 @@ Custom classifierPrompt remains a full replacement. Preserve provenance, complet
 
 ## Audit
 
+### Windows / PowerShell approval diagnostics (approval-v3)
+
+Native `pwsh` escalation requests now use the same identity, full-argument and reason validation as `bash/write/edit`. PowerShell has a separate conservative static word reader: ordinary Windows paths and literal quoted arguments are supported. Only recognized Git, Python, Node and PowerShell native command families reach their action rules; unknown commands and PowerShell aliases never inherit Bash semantics. Recognition is not approval: local guards and model review still apply. Composition, pipelines, redirection, interpolation, `&` and `--%` remain manual.
+
+`/auto-report` distinguishes local-rule handoffs from classifier handoffs and explains unsupported tools/syntax/commands, unverified calls/paths, and unverified Python compile environments. `call-sha256` is the first 16 hex characters of SHA-256 over `JSON.stringify(callId)`, for local correlation without logging the original command, path or justification.
+
+The screenshot-style `python -m py_compile ...; if (...) { ... }` remains manual as unsupported syntax. Removing the conditional lets the guard recognize compilation, but executable provenance and bytecode output scope are still unverified. Even `-I -S` alone does not prove a trusted interpreter. Python compilation is not auto-approved in this release. The approver never rewrites the pending command or treats an agent's sandbox/ACL error claim as verified diagnostics.
+
+Windows lexical guards cover separators, case, recognized sensitive/configuration directories and selected special paths. UNC/device paths, drive-relative paths and absolute paths with ADS hand off. These checks do not establish real junction/symlink destinations. Cache scope includes the tool, host platform and policy version. The `windows-approval` CI job adds native adapter checks; actual Windows DSH ACL integration, live-model review and rollout remain separate acceptance gates in [the acceptance record](./docs/ACCEPTANCE.md).
+
 Decisions use fixed reason codes and decisionSource (rule / model / cache / manual-handoff), for example `decision=auto-approve verdict=approve reasonCode=routine decisionSource=model`. The authoritative audit ledger remains dsh's paired `approval/asked` and `approval/decided` session events.
 
 Enter `/auto-report` for low-risk auto, required handoff, model handoff, cache replay, missing evidence and shadow groups. Rows include reasonCode / decisionSource and an arguments hash; command, argument and justification contents are omitted. The report is isolated by session: running it in another session will not show this session's entries, and restarting dsh or reloading the plugin clears it. It is a convenient in-memory view, not a complete or durable audit log.

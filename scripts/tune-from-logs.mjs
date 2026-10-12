@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_DANGER_PATTERNS, inspectCommand } from '../danger-patterns.js'
+import { DEFAULT_DANGER_PATTERNS, inspectCommand, isShellTool } from '../danger-patterns.js'
 
 export const REPORT_NOTICE = Object.freeze([
   '说明：approval 审计事件不记录批准者身份，无法区分自动批准或人工批准；以下所有建议都是启发式候选。',
@@ -443,12 +443,12 @@ export function parseSessionJsonl(content, sourceName = '<session.jsonl>') {
     approval.commandFamily = commandFamily(approval.command)
     approval.targetSandboxMode = targetSandboxMode(approval.asked.data.reason ?? '')
     approval.evidence = approval.command ?? ''
-    approval.action = approval.command === undefined ? undefined : inspectCommand(approval.command, { workdir: header.cwd })
+    approval.action = approval.command === undefined ? undefined : inspectCommand(approval.command, { workdir: header.cwd, shell: toolCall?.data.name ?? approval.asked.data.toolName })
     approval.owned = approval.asked.seq >= (header.seedLength ?? 0)
   }
 
   const guardCandidates = [...calls.values()].filter(call => call.seq >= (header.seedLength ?? 0)
-    && call.data.name === 'bash' && inspectCommand(commandFromArguments(call.data.arguments), { workdir: header.cwd }).handoffReason !== undefined)
+    && isShellTool(call.data.name) && inspectCommand(commandFromArguments(call.data.arguments), { workdir: header.cwd, shell: call.data.name }).handoffReason !== undefined)
   const coverage = Object.freeze({
     guardCandidateToolCalls: guardCandidates.length,
     withoutApprovalRequest: guardCandidates.filter(call => !approvals.some(approval => approval.asked.data.callId === call.data.callId)).length,

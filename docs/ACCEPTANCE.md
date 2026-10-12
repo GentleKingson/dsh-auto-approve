@@ -1,5 +1,27 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-12：Windows / pwsh 兼容与诊断（approval-v3）
+
+本轮基于 `de87493ae48e22169a83ea2cd026ea6639256e60` 工作树，未发布、未修改宿主 ACL，也未将原始截图命令加入自动批准白名单。下文旧版记录及 `approval-*.json` 保持为历史证据。
+
+| 阶段 | 本轮结果 |
+| --- | --- |
+| P0 诊断 | 完成：区分未知工具、调用校验、Shell 语法、未知命令、路径、Python 编译环境、模型判断与超时；报告增加 callId 的摘要哈希，不输出原始理由/命令 |
+| P1 协议与路径 | 完成插件侧 `pwsh` 参数契约适配、Windows 词法路径保护、工具/平台/策略缓存绑定及离线统计；未声称 junction/symlink 真实落点已被证明 |
+| P2 受限解析 | 完成静态单命令子集；保留 Bash 原解析器，PowerShell 不复用 Unix 别名语义；复合 `if`、管道、展开、智能引号、空参数仍转人工；未引入运行时 AST 子进程 |
+| P3 Python 编译自动评审 | 尚未开启：已识别编译意图并提供专门原因码。当前宿主审批参数不提供可信解释器来源、启动环境和真实缓存落点；禁止把 `-I -S`、命令名或 ACL 错误说明当作这些证据。后续需先建立宿主事实来源再开放 |
+| P4 验收与灰度 | 本地 Linux 回归和 Python 烟雾测试已执行；已添加 Windows Node 22/24 CI，原生 PowerShell 只解析 AST，不执行候选命令。Windows CI、实际 DSH Windows ACL、真实模型和实际自动批准灰度尚未在本次工作区执行 |
+
+本地测试入口：`node --test --test-reporter=tap`。193 项中 192 项通过，1 项 Windows 原生 AST 对照在 Linux 跳过。测试包含 PowerShell 请求身份/参数、低风险模型通路、模型拒绝、取消、上下文变化、缓存跨工具隔离、新用户限制、中风险授权不缓存、Windows 敏感路径、原始截图命令及离线日志回放。Python 烟雾测试在临时目录中使用 `-I -S -m py_compile`：源文件包含运行时异常，同目录放置会抛异常的同名 `py_compile.py`；编译成功并只生成目标 `.pyc`，证明该受控环境没有运行目标源码或同目录替代模块，不能据此证明任意用户环境安全。
+
+140 条不可变语料固定 mock 回放：`unsafeAuto=0`、`safeToHuman=0`、`modelCalls=73`；Windows 专项测试独立于旧语料，不篡改历史标签。真实模型延迟、真实人工负担：NOT_MEASURED。
+
+现场排查仍需实际 DSH 版本、toolName 和原始 ACL 错误。`grantwrite acl problem` 自述只能说明代理申请升级的理由；不能确定失败发生在沙箱初始化、缓存写入还是普通文件访问。插件只诊断审批分支，不修复 ACL 后端。
+
+后续准入：Windows CI 和对应 DSH 版本集成通过后，使用 `shadowMode: true`、`sessionMemory: false` 做真实模型观察；取得可信解释器和输出范围证据前，Python 编译保持人工。回滚可切回 `workspace-write`，或开启影子模式/禁用插件。不能通过删除危险规则或复制旧人工批准消除弹窗。
+
+上游契约核对固定为 DSH `d743267388641bc76f17c45ce8b4c231aed1d32c` 的 `packages/shell/tool-pwsh/src/index.ts`；这不是用户实际安装版本的证明。语法与行为参考 [PowerShell parsing](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_parsing?view=powershell-7.5)、[Python py_compile](https://docs.python.org/3/library/py_compile.html)、[Python CLI](https://docs.python.org/3/using/cmdline.html)、[Node path](https://nodejs.org/api/path.html#windows-vs-posix)。
+
 日期：2026-10-09。基线：`c6d4222746fef089de4e40063d05d26a4191bc66`，package.json 仍为 0.7.1。以下原始验收针对首次候选工作树；下一轮修复记录另列，不能把 HEAD 当成修改后的提交 SHA。
 
 ## 方案审阅与执行范围

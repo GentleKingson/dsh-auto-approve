@@ -495,3 +495,13 @@ test('CLI reads multiple plaintext logs, emits warnings to stderr, and never cla
   )
   assert.match(stderr, /尚未 decided/)
 })
+
+test('offline replay applies PowerShell semantics and counts pwsh guard coverage', () => {
+  const call = toolCall(1, 'pwsh-call', 'echo safe')
+  call.data.name = 'pwsh'
+  const ask = asked(2, 'pwsh-approval', 'pwsh-call')
+  ask.data.toolName = 'pwsh'
+  const log = parseSessionJsonl(jsonl([header(), event('turn/start', 0, { turn: 1 }), call, ask, decided(3, 'pwsh-approval'), event('turn/end', 4, { turn: 1, reason: { kind: 'completed' } })]))
+  assert.equal(log.approvals[0].action.handoffReason, 'unsupported-command')
+  assert.deepEqual(analyzeSessions([log]).coverage, { guardCandidateToolCalls: 1, withoutApprovalRequest: 0 })
+})
