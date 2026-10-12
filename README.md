@@ -227,6 +227,16 @@ dsh plugin --profile web remove dsh-auto-approve
 
 ## 审计
 
+### Windows / PowerShell 审批诊断（approval-v3）
+
+支持原生 `pwsh` 与 `bash/write/edit` 的一次性升级请求，仍逐项校验工具身份、完整参数和升级理由。`pwsh` 使用独立的保守静态解析：支持普通 Windows 路径与静态引号参数；当前只把已识别的 Git、Python、Node、PowerShell 原生命令族交给对应规则，未知命令和 PowerShell 别名不套用 Bash 语义。识别成功也不等于自动批准，仍须通过本地规则和模型评审。`; if (...)`、管道、重定向、变量展开、`&`、`--%` 等语法继续转人工。
+
+`/auto-report` 将本地规则转人工与分类器转人工分组，并解释 `unsupported-tool`、`call-unverified`、`unsupported-syntax`、`unsupported-command`、`path-unverified`、`python-compile-environment-unverified` 等原因。`call-sha256` 是原始 callId 经 `JSON.stringify` 后计算 SHA-256 的前 16 位，可与本地导出日志关联；报告不输出原始命令、路径或升级理由。
+
+例如 `python -m py_compile "D:\AI\InvoiceTool.py"; if ($LASTEXITCODE -eq 0) { "SYNTAX OK" }` 会报告语法不支持。去掉 `if` 后可以识别编译意图，但仍会报告解释器和缓存落点未核验。`-I -S` 不能单独证明解释器可信，当前版本不自动放行 Python 编译。审批器不会改写原命令或将代理声称的 `sandbox permission issue / grantwrite` 当成已验证的 ACL 故障。
+
+Windows 路径保护覆盖反斜杠、大小写、已识别的敏感/配置目录和部分特殊路径；UNC、设备路径、盘符相对路径及绝对路径中的 ADS 转人工。这些是词法保护，不证明 junction/symlink 的真实落点。缓存绑定工具、宿主平台和策略版本。Windows 原生检查见 CI 的 `windows-approval`；实际 DSH Windows ACL、真实模型与灰度状态见[验收记录](./docs/ACCEPTANCE.md)。
+
 插件决策日志只记录固定原因码和来源，例如 `decision=auto-approve verdict=approve reasonCode=routine decisionSource=model`，不摘录命令、参数或 justification。权威审计台账仍由 dsh 内置、成对出现的 `approval/asked` 与 `approval/decided` 会话事件承担。
 
 在当前会话输入 `/auto-report`，可查看低风险自动批准、必需人工、模型转人工、缓存重放、缺少证据及影子评估六组记录。报告包含 `reasonCode` / `decisionSource`，命令和参数只保留摘要哈希，原文及理由不摘录。报告按 session 隔离：在另一个会话运行不会看到本会话的条目；重启 dsh 或重新加载插件会清空它。它只是便捷的内存视图，不是完整、持久的审计日志。

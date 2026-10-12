@@ -20,6 +20,27 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  windows-approval:
+    name: Windows approval adapters (Node ${{ matrix.node-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      # Native paths + parse-only PowerShell AST + disposable Python compile.
+      # This is adapter coverage, not a claim of Windows DSH ACL integration.
+      - run: node --test test/windows-approval.test.js
+
   # Real-host integration on pinned DSH releases over ACP. Model responses come
   # from a local scripted endpoint; see docs/ACCEPTANCE.md for scope.
   dsh-integration:

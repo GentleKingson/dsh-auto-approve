@@ -34,6 +34,7 @@ function textResponse(text, finish = { kind: 'stop' }) {
 
 function requestOf({
   command = 'npm view left-pad version',
+  toolName = 'bash',
   reason = 'escalate sandbox to danger-full-access: install a dependency from npm',
   events,
   callId = 'call-1',
@@ -51,13 +52,13 @@ function requestOf({
             turn: 1,
             step: 1,
             callId,
-            name: 'bash',
+            name: toolName,
             arguments: toolArguments(command, reason.slice(reason.indexOf(": ") + 2)),
           },
         }],
       },
     },
-    toolName: 'bash',
+    toolName,
     callId,
     reason,
     ...signal === undefined ? {} : { signal },
@@ -271,7 +272,7 @@ test('pre-cancelled requests are not attributed to Auto before preset resolution
   assert.deepEqual(await app.run(request), { result: MANUAL, nextCalls: 1 })
   const report = await app.runCommand(request)
   assert.match(report.text, /自动批准 0 条 \/ Auto-approved/)
-  assert.match(report.text, /危险清单拦截 0 条 \/ Danger-list handoff/)
+  assert.match(report.text, /本地规则转人工 0 条 \/ Local-rule handoff/)
   assert.match(report.text, /分类器转人工 0 条 \/ Classifier-to-human/)
 })
 
@@ -538,6 +539,8 @@ test('approve is the only automatic approval exit', async () => {
   assert.deepEqual(evidence, {
     toolName: 'bash',
     command: 'npm view left-pad version',
+    shell: 'bash',
+    platform: process.platform,
     toolArguments: toolArguments('npm view left-pad version'),
     justification: 'escalate sandbox to danger-full-access: install a dependency from npm',
     targetSandboxMode: 'danger-full-access',
@@ -549,7 +552,7 @@ test('approve is the only automatic approval exit', async () => {
     userMessages: [],
     minimumRisk: 'low',
     riskHints: [],
-    policyVersion: 'approval-v2',
+    policyVersion: 'approval-v3',
   })
   assert.match(
     app.lastLlmOptions.system,
@@ -1036,7 +1039,7 @@ test('/auto-report groups decisions per session and explains its in-memory lifet
   const reportA = await app.runCommand(sessionA)
   assert.equal(reportA.kind, 'success')
   assert.match(reportA.text, /自动批准 1 条 \/ Auto-approved/)
-  assert.match(reportA.text, /危险清单拦截 1 条 \/ Danger-list handoff/)
+  assert.match(reportA.text, /本地规则转人工 1 条 \/ Local-rule handoff/)
   assert.match(reportA.text, /分类器转人工 1 条 \/ Classifier-to-human/)
   assert.match(reportA.text, /arguments-sha256=/)
   assert.doesNotMatch(reportA.text, /npm view|git push|echo uncertain/)
@@ -1051,7 +1054,7 @@ test('/auto-report groups decisions per session and explains its in-memory lifet
 
   const reportB = await app.runCommand(sessionB)
   assert.match(reportB.text, /自动批准 1 条 \/ Auto-approved/)
-  assert.match(reportB.text, /危险清单拦截 0 条 \/ Danger-list handoff/)
+  assert.match(reportB.text, /本地规则转人工 0 条 \/ Local-rule handoff/)
   assert.match(reportB.text, /分类器转人工 0 条 \/ Classifier-to-human/)
   assert.match(reportB.text, /arguments-sha256=/)
   assert.doesNotMatch(reportB.text, /package-a|echo uncertain|git push/)
@@ -1687,5 +1690,49 @@ test('dependency installs require exact medium-risk consent even with scripts di
   assert.deepEqual(await app.run(req), { result: 'allowed-once', nextCalls: 0 })
   assert.deepEqual(await app.run(req), { result: 'allowed-once', nextCalls: 0 })
   assert.equal(app.llmCalls, 3)
+  await app.dispose()
+})
+
+test('pwsh cache is scoped to the tool and rechecks newer user restrictions', async () => {
+  const app = harness()
+  const req = requestOf({ command: 'git status', toolName: 'pwsh' })
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 1)
+  assert.match((await app.runCommand(req)).text, /缓存重放 1 条/)
+  req.toolName = req.agent.session.events[0].data.name = 'bash'
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 2)
+  req.toolName = req.agent.session.events[0].data.name = 'pwsh'
+  req.agent.session.events.unshift(userEvent('Do not execute this command.'))
+  assert.equal((await app.run(req)).result, MANUAL)
+  assert.equal(app.llmCalls, 2)
+  await app.dispose()
+})
+
+test('pwsh reports explain compile handoffs without leaking command or justification', async () => {
+  const app = harness()
+  const req = requestOf({ command: String.raw`python -m py_compile "D:\AI\票据审核应用\InvoiceTool.py"`, toolName: 'pwsh' })
+  assert.equal((await app.run(req)).result, MANUAL)
+  const report = (await app.runCommand(req)).text
+  assert.match(report, /已识别 Python 编译/)
+  assert.match(report, /call-sha256=[a-f0-9]{16}/)
+  assert.doesNotMatch(report, /InvoiceTool|票据审核应用|install a dependency/)
+  assert.equal(app.llmCalls, 0)
+  await app.dispose()
+})
+
+test('pwsh exact medium authorization works without caching and native git names respect no-push', async () => {
+  const command = 'git.exe push origin feature'
+  const text = `Run: ${command}`
+  const app = harness({ stream: () => textResponse(JSON.stringify({ risk: 'medium', verdict: 'approve', reasonCode: 'explicit-user-authorization', authorization: { messageId: 'user-1', quote: text } })) })
+  const req = requestOf({ command, toolName: 'pwsh' })
+  req.agent.session.events.unshift(userEvent(text))
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 2)
+  req.agent.session.events.splice(1, 0, userEvent('Do not push this branch.', 'user-2'))
+  assert.equal((await app.run(req)).result, MANUAL)
+  assert.equal(app.llmCalls, 2)
   await app.dispose()
 })
