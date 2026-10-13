@@ -1,10 +1,12 @@
 name: DSH Real Project
 
-# End-to-end check on a pinned third-party project (lukeed/clsx): baseline
-# PASS, seeded bug FAIL, one `dsh --profile headless` run repairs it, with one
-# plugin allowed-once and one fail-closed handoff in the same run. Agent and
-# classifier turns are scripted; no secret is used. Separate from the
-# required PR checks. See docs/REAL_PROJECT_CI.md.
+# End-to-end check on pinned real projects: lukeed/clsx (baseline PASS,
+# seeded bug FAIL) and the G-003 legacy case (public tests exactly 3 PASS /
+# 3 FAIL). One `dsh --profile headless` run per fixture repairs the public
+# tests, with one plugin allowed-once and one fail-closed handoff in the same
+# run. Agent and classifier turns are scripted; no secret is used, and the
+# G-003 held-out judge is not in this repository (hiddenJudgeScore NOT_RUN).
+# Separate from the required PR checks. See docs/REAL_PROJECT_CI.md.
 
 on:
   workflow_dispatch:
@@ -21,6 +23,8 @@ on:
       - scripts/ci-dsh-real-project-live.mjs
       - scripts/ci-dsh-live.mjs
       - scripts/ci-dsh-integration.mjs
+      - scripts/ci-dsh-real-project-judge.mjs
+      - scripts/real-project-fixtures.mjs
       - test/fixtures/real-projects/**
       - index.js
       - danger-patterns.js
@@ -32,9 +36,13 @@ permissions:
 
 jobs:
   real-project-mock:
-    name: real project clsx (DSH 0.2.0-rc.2, scripted model)
+    name: real project ${{ matrix.fixture }} (DSH 0.2.0-rc.2, scripted model)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [clsx, g003]
     env:
       DSH_VERSION: 0.2.0-rc.2
       PNPM_VERSION: 10.28.0
@@ -42,8 +50,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # clsx's `uvu -r esm` test runner fails on Node 22+, so the project's
-      # own install and tests run on Node 20; DSH runs on Node 24 below.
+      # clsx's `uvu -r esm` test runner fails on Node 22+, so the projects'
+      # own install and tests run on Node 20 (G-003 needs >=20); DSH runs on
+      # Node 24 below.
       - uses: actions/setup-node@v4
         with:
           node-version: 20.x
@@ -60,7 +69,7 @@ jobs:
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
       - name: Real project through headless DSH
         run: >-
-          node scripts/ci-dsh-real-project.mjs
+          node scripts/ci-dsh-real-project.mjs --fixture "${{ matrix.fixture }}"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project"
           --evidence "$RUNNER_TEMP/dsh-real-project-evidence"
@@ -69,7 +78,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-real-project-mock
+          name: dsh-real-project-mock-${{ matrix.fixture }}
           path: ${{ runner.temp }}/dsh-real-project-evidence
           if-no-files-found: error
           retention-days: 30
@@ -78,12 +87,13 @@ jobs:
   # scripted endpoint standing in for the model gateway: wiring, guards and
   # accounting for suites A/B/C, no secret and no real model.
   real-project-live-self-test:
-    name: live driver self-test (suite ${{ matrix.suite }}, no model)
+    name: live driver self-test (${{ matrix.fixture }} suite ${{ matrix.suite }}, no model)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        fixture: [clsx, g003]
         suite: [A, B, C]
     env:
       DSH_VERSION: 0.2.0-rc.2
@@ -108,7 +118,7 @@ jobs:
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
       - name: Live driver self-test
         run: >-
-          node scripts/ci-dsh-real-project-live.mjs --self-test --suite "${{ matrix.suite }}"
+          node scripts/ci-dsh-real-project-live.mjs --self-test --suite "${{ matrix.suite }}" --fixture "${{ matrix.fixture }}"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project-live"
           --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
@@ -116,7 +126,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-real-project-live-self-test-${{ matrix.suite }}
+          name: dsh-real-project-live-self-test-${{ matrix.fixture }}-${{ matrix.suite }}
           path: ${{ runner.temp }}/dsh-real-project-live-summary
           if-no-files-found: error
           retention-days: 30

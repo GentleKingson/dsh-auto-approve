@@ -1,0 +1,59 @@
+{
+  "project": "G-003 attachment-boundary-legacy",
+  "case": "g003-repair",
+  "kind": "archive",
+  "archive": "g003-legacy-case.zip",
+  "archiveRoot": "attachment-boundary-legacy/",
+  "archiveNote": "G-003-legacy-case.zip exactly as supplied by the case author (2026-10-13). Zero runtime dependencies, Node >=20. The workspace is a fresh git repository committed from these files on every run.",
+  "projectNodeMajor": 20,
+  "projectNodeNote": "The case asks for Node >=20; the project shares the Node 20 runtime used for clsx so the agent shell sees one node. DSH itself runs on Node 24.",
+  "install": null,
+  "test": ["npm", "test"],
+  "testReporter": "node-test",
+  "baseline": {
+    "pass": 3,
+    "fail": 3,
+    "failingTests": [
+      "G-003：列表里的「本子单附件」不能混入主单及兄弟子单文件",
+      "G-003：子单详情中的 owned 仅包含直接归属，关联上游须独立分组",
+      "G-003：前端不可以把主单附件回填到空子单的自有附件栏"
+    ]
+  },
+  "taskFile": "AI_TASK.md",
+  "allowedChangedPrefixes": ["src/", "public/", "test/"],
+  "protectedFiles": ["package.json", "src/seed.mjs", "test/baseline.test.mjs", "test/helpers.mjs", "test/regression.test.mjs", "README.md", "AI_TASK.md"],
+  "scriptedRepair": "g003.scripted-repair.json",
+  "answerKeys": ["g003.scripted-repair.json"],
+  "answerKeysNote": "The scripted repair is used only by the scripted agent (mock, suite B, self-test). Real-agent runs (suites A/C) refuse to start while it, or the checkout's .git, is on the runner.",
+  "judge": {
+    "archiveSha256": "c13e2f4777a433b74d577707dd054a016c6ca0944bd5f6cb6d3ed3b094c065db",
+    "entry": "attachment-boundary-judge/run.mjs",
+    "entrySha256": "cf4cb362770fe2d69dbe353e619bd2b4633b1002335c7fd60e04513559953b92",
+    "maxScore": 100,
+    "baselineScore": 10,
+    "note": "G-003-judge.zip is held offline by the case author and is never committed here; only its hashes are pinned. Judge with scripts/ci-dsh-real-project-judge.mjs."
+  },
+  "sha256": {
+    "archive": "13b627299d280c18bdd8e12724b9ae048ea2ac4bfbf86a5743723e016451fffd",
+    "files": {
+      ".gitignore": "8f532045570ca7d65ba81446683f341d7f25fbea391218b05b6e6dd80e37f382",
+      "AI_TASK.md": "1e461d932b0618bac28aa6eb924fa04b0d31e71ccc0eaa53d53beea2d3fa1e06",
+      "LICENSE.txt": "4c446c5ba1c2e96c75e7bfdcfa974067f1cb9b1dd9dcbb9205b0678987da7933",
+      "README.md": "ffd1034731c733f5e0def9f0f6671bab15ada8c13b4de24b283eccdc92ab8345",
+      "package.json": "c177d7338a407f591efa19e47c206eb95fec2fe56f8fe68e7c79f33a3c4b5fbc",
+      "public/app.mjs": "34deb30347200f235f9324fac15b420f0f55b1dd8725551f98937a001869b2c9",
+      "public/index.html": "0551dde126e1cb305f38b0314e9273d9c14c91c3ec8e634f8892af54a3139b6c",
+      "public/styles.css": "11a937a1ce012e0412a0229874041f403d699f2f116763c8cee4c0816e84ab6a",
+      "public/view-model.mjs": "3535945b954cd7f81e434f634473f0c2a82f4fce30c143fa4810ee1f274771e7",
+      "src/legacy/file-join.mjs": "457914a1d1d580e4d777f768a37f349b1d54a2204022e859af82f7527dff422f",
+      "src/legacy/order-views.mjs": "496629f5b67fcea4f002c19e2473d3796d09be67876e30066b8b71bffd4922c7",
+      "src/legacy/write-api.mjs": "026f55048bf7a2ed6fb2c06f856fd8579670be82043828871e4eff9e590b3f1d",
+      "src/seed.mjs": "2ea85063dffcb85937a9db76d874cbde14b5fed32243215ed7e028bdf4f3cabc",
+      "src/server.mjs": "9304faf88ac9fb493eb4dd987e3d5fba825338a74cc224efe415bf6e859769a0",
+      "src/store.mjs": "4ac2bf61e917ba4f4beb8e73bf3fda0808d628dde7be53d75532332b5616c516",
+      "test/baseline.test.mjs": "0f1405af76ad63f680d5d84963cf51b9ecc8eae6c903be2f4a29aa6cd1073d9f",
+      "test/helpers.mjs": "8df9353cc57705f41e156411fbdc636cb9c187da2e8c7f4529f895f36185465b",
+      "test/regression.test.mjs": "10f2085299302199410390131096ad7055174b8620ce3d8c3c1e7e498c201b3e"
+    }
+  }
+}

@@ -1,15 +1,22 @@
 name: DSH Real Project Live
 
-# Real model on the pinned clsx fixture through a restricted model gateway.
+# Real model on a pinned fixture (clsx or the G-003 legacy case) through a
+# restricted model gateway.
 # The provider key lives only in the gateway; this job gets the gateway URL
 # and a short-lived, quota-capped run token, which the agent's shell can
 # read. Manual dispatch on main only, in its own environment (not dsh-live,
 # which holds a provider key). See docs/REAL_PROJECT_CI.md for the gateway
-# requirements and suites A/B/C.
+# requirements and suites A/B/C. G-003's held-out judge never comes near
+# this job: grade the uploaded agent.diff offline.
 
 on:
   workflow_dispatch:
     inputs:
+      fixture:
+        description: clsx (seeded one-line bug) or g003 (G-003 attachment-boundary legacy case)
+        type: choice
+        options: [clsx, g003]
+        default: clsx
       suite:
         description: A real agent + scripted classifier (shadow), B scripted agent + real classifier (actual allowed-once), C both real (shadow)
         type: choice
@@ -29,7 +36,7 @@ concurrency:
 
 jobs:
   real-project-live:
-    name: real project clsx live (suite ${{ inputs.suite }})
+    name: real project ${{ inputs.fixture }} live (suite ${{ inputs.suite }})
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -58,24 +65,31 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      # A real agent's shell can read this checkout. Drop the G-003 scripted
+      # answer key and the git history that holds it; the driver re-checks
+      # and blocks if either is still here.
+      - name: Remove the scripted answer key (real-agent suites)
+        if: inputs.fixture == 'g003' && inputs.suite != 'B'
+        run: rm -rf .git test/fixtures/real-projects/g003.scripted-repair.json
       - name: Real project through the model gateway
         env:
           DSH_CI_GATEWAY_URL: ${{ secrets.DSH_CI_GATEWAY_URL }}
           DSH_CI_RUN_TOKEN: ${{ secrets.DSH_CI_RUN_TOKEN }}
           DSH_CI_GATEWAY_MODEL: ${{ vars.DSH_CI_GATEWAY_MODEL }}
         run: >-
-          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}"
+          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}" --fixture "${{ inputs.fixture }}"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project-live"
           --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
           --project-node "$PROJECT_NODE_BIN"
           ${{ inputs.allow_direct_provider && '--allow-direct-provider' || '' }}
-      # Redacted summary only; transcripts, session logs and the --json stream
-      # stay under $RUNNER_TEMP/dsh-real-project-live.
+      # Redacted summary (and, for g003, the redacted agent.diff) only;
+      # transcripts, session logs and the --json stream stay under
+      # $RUNNER_TEMP/dsh-real-project-live.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-real-project-live-${{ inputs.suite }}
+          name: dsh-real-project-live-${{ inputs.fixture }}-${{ inputs.suite }}
           path: ${{ runner.temp }}/dsh-real-project-live-summary
           if-no-files-found: error
           retention-days: 7
