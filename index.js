@@ -681,7 +681,10 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
     const workspacePath = resolve(session.header.cwd)
     const workdir = resolve(workspacePath, verified.args.workdir ?? '.')
     const selection = classifierModelSelection(ctx, config)
-    const scope = digest([session.id, process.platform, verified.call.name, workspacePath, workdir, verified.args.sandbox_permissions, userMessage.revision, policyKey, selection])
+    // A native away/back transition must not restore an earlier permission,
+    // even when no approval request was made while outside Auto.
+    const permissionRevision = digest(events.filter(event => ['permission/preset', 'sandbox/mode', 'approval/policy'].includes(event?.type)))
+    const scope = digest([session.id, process.platform, verified.call.name, workspacePath, workdir, verified.args.sandbox_permissions, userMessage.revision, permissionRevision, policyKey, selection])
     const key = digest([scope, req.toolName, verified.raw, req.reason])
     return { session, verified, userMessage, workspacePath, workdir, selection, key, scope }
   }
@@ -718,6 +721,7 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
 
       const context = contextOf(req)
       if (context.error === 'preset-changed') {
+        memory?.clear(req.agent?.session?.id)
         return delegate()
       }
       autoPreset = true

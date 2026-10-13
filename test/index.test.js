@@ -1799,3 +1799,55 @@ test('pwsh exact medium authorization works without caching and native git names
   assert.equal(app.llmCalls, 2)
   await app.dispose()
 })
+
+test('leaving Auto invalidates remembered permission before returning to the preset', async () => {
+  let preset = 'sandboxed-auto'
+  const app = harness({ current: () => preset })
+  const req = requestOf()
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  preset = 'workspace-write'
+  assert.deepEqual(await app.run(req), { result: MANUAL, nextCalls: 1 })
+  preset = 'sandboxed-auto'
+  assert.equal((await app.run(req)).result, 'allowed-once')
+  assert.equal(app.llmCalls, 2)
+  await app.dispose()
+})
+
+test('permission roundtrip without an intervening request invalidates cache and in-flight verdicts', async () => {
+  const roundtrip = req => req.agent.session.events.push(
+    { type: 'permission/preset', data: { preset: 'workspace-write' } },
+    { type: 'permission/preset', data: { preset: 'sandboxed-auto' } },
+  )
+  const req = requestOf()
+  const app = harness()
+  await app.run(req)
+  roundtrip(req)
+  await app.run(req)
+  assert.equal(app.llmCalls, 2)
+  assert.ok(app.logs.every(line => !/verdict=remembered/.test(line)))
+  await app.dispose()
+
+  const racing = requestOf()
+  const raceApp = harness({ stream: () => {
+    roundtrip(racing)
+    return textResponse('{"risk":"low","verdict":"approve","reasonCode":"routine"}')
+  } })
+  assert.deepEqual(await raceApp.run(racing), { result: MANUAL, nextCalls: 1 })
+  await raceApp.dispose()
+})
+
+
+test('native sandbox and approval policy history invalidates cached grants even after restoring the old values', async () => {
+  for (const [type, changed, restored] of [
+    ['sandbox/mode', { mode: 'read-only' }, { mode: 'workspace-write' }],
+    ['approval/policy', { policy: 'never' }, { policy: 'ask' }],
+  ]) {
+    const app = harness()
+    const req = requestOf()
+    await app.run(req)
+    req.agent.session.events.push({ type, data: changed }, { type, data: restored })
+    await app.run(req)
+    assert.equal(app.llmCalls, 2, type)
+    await app.dispose()
+  }
+})

@@ -19,7 +19,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -47,7 +47,7 @@ export function parseArgs(argv) {
 
 export function within(child, parent) {
   const path = relative(parent, child)
-  return path === '' || (!path.startsWith('..') && !path.startsWith(sep) && path !== '..')
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
 }
 
 export function canonical(path) {
@@ -133,8 +133,9 @@ export function createModelServer() {
       let evidence
       try { evidence = JSON.parse(evidenceText) } catch { evidence = undefined }
       const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(evidence?.latestUserMessage ?? '')?.[1] ?? currentCase ?? 'unknown'
-      const verdict = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
-      log.push({ kind: 'classifier', case: caseName, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
+      const reply = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
+      const verdict = typeof reply === 'function' ? reply(evidence) : reply
+      log.push({ kind: 'classifier', case: caseName, classifierModel: request.model, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
       stream(res, { text: verdict })
       return
     }
@@ -461,6 +462,32 @@ export function mockOverrides(port) {
   }
 }
 
+/** Disposable host controls call native setters; they never forge session events or approvals. */
+function writeMemoryControls(dir) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-ci-memory-controls', version: '0.0.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+  writeFileSync(join(dir, 'cordis.patch.yml'), '- insert:\n    - id: memory-controls\n      name: dsh-ci-memory-controls\n')
+  writeFileSync(join(dir, 'index.js'), `export const inject = ['permissionPresets', 'agentDefaultModel']
+export function apply(ctx) {
+    ctx.on('agent/pre-step', async ({ agent, step }, next) => {
+      const messages = agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data?.source?.kind === 'user')
+      const text = messages.at(-1)?.data?.content?.map(part => part.text ?? '').join('') ?? ''
+      if (text.startsWith('[ci-case:memory-preset]')) {
+        if (step === 3) ctx.permissionPresets.set(agent.session, 'workspace-write')
+        if (step === 4) ctx.permissionPresets.set(agent.session, 'sandboxed-auto')
+      }
+      if (text.startsWith('[ci-case:memory-preset-roundtrip]') && step === 3) {
+        ctx.permissionPresets.set(agent.session, 'workspace-write')
+        ctx.permissionPresets.set(agent.session, 'sandboxed-auto')
+      }
+      if (text.startsWith('[ci-case:memory-model]') && (step === 3 || step === 4)) {
+        await ctx.agentDefaultModel.saveSelection({ provider: '${MODEL_PROVIDER}', model: step === 3 ? '${MODEL_ID}-alternate' : '${MODEL_ID}' })
+      }
+      return next()
+    })
+  }`)
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   evidenceDir = options.evidence
@@ -479,6 +506,9 @@ async function main() {
 
   // Install this checkout through the host's own plugin manager.
   installLinkedPlugin(options, root, baseEnv, PLUGIN_DIR, 'plugin-install.log')
+  const memoryControls = join(root, 'memory-controls')
+  writeMemoryControls(memoryControls)
+  installLinkedPlugin(options, root, baseEnv, memoryControls, 'memory-controls-install.log')
 
   const model = createModelServer()
   const port = await model.listen()
@@ -501,6 +531,11 @@ async function main() {
     writeFileSync(patchFile, autoPatch())
     writeEvidence('cordis.patch.auto.yml', autoPatch())
     failed = !(await autoPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
+    writeFileSync(patchFile, patch(true, {
+      'auto-approve': { shadowMode: false, sessionMemory: true, provider: null, model: null },
+      'llm-pi-ai': { providers: { [MODEL_PROVIDER]: { models: [MODEL_ID, `${MODEL_ID}-alternate`].map(id => ({ id, contextWindow: 131072, maxTokens: 4096, reasoningEfforts: false })) } } },
+    }))
+    failed = !(await memoryPhase({ options, model, baseEnv, dshHome, workspace, outside })) || failed
     writeFileSync(patchFile, patch(false))
     writeEvidence('cordis.patch.disabled.yml', patch(false))
     failed = !(await disabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
@@ -830,6 +865,100 @@ async function autoPhase({ options, model, baseEnv, dshHome, workspace, outside,
     check(phase, 'dsh process exited after stdin closed', exit.exitedCleanly, exit)
   }
   return ok
+}
+
+/** Real ACP sessions and native approvals; only model responses are controlled. */
+async function memoryPhase({ options, model, baseEnv, dshHome, workspace, outside }) {
+  const phase = 'session-memory'
+  const acp = startAcp({ dsh: options.dsh, cwd: workspace, env: baseEnv, stderrPath: join(evidenceDir, 'dsh-memory.stderr.log'), label: phase })
+  const low = '{"risk":"low","verdict":"approve","reasonCode":"routine"}'
+  const target = join(outside, 'memory-marker')
+  const args = { command: `touch ${target}`, description: 'Create a disposable memory marker', sandbox_permissions: 'danger-full-access', justification: 'User authorized this disposable marker.' }
+  const step = arguments_ => ({ name: 'bash', arguments: arguments_ })
+  let ok = true
+  try {
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
+    const subdir = join(workspace, 'memory-subdir')
+    mkdirSync(subdir)
+    const name = 'memory-bindings'
+    // Exact replay, new arguments, new workdir, then the original context again.
+    model.script(name, [step(args), step(args), step({ ...args, command: `touch ${target}-other` }), step({ ...args, workdir: subdir }), step(args)], low)
+    const first = await runCase(acp, { workspace, caseName: name, prompt: 'Create these disposable markers.', onPermission: reject })
+    const chain = approvalChain(dshHome, first.sessionId)
+    const classifiers = classifierCalls(model, name)
+    check(phase, 'five native requests all allowed-once with no client prompt', chain.asked.length === 5 && chain.decided.length === 5 && chain.decided.every(item => item.outcome === 'allowed-once') && first.permissions.length === 0, chain.decided)
+    check(phase, 'only exact same-context replay saves a classification; argument and workdir changes reclassify', classifiers.length === 4 && classifiers[0].toolArguments === JSON.stringify(args) && classifiers[1].toolArguments.includes('-other') && classifiers[2].toolArguments.includes('workdir') && classifiers[3].toolArguments === JSON.stringify(args), classifiers)
+    check(phase, 'cached and reclassified approvals remain uniquely bound to native calls', chain.asked.every(ask => chain.calls.filter(call => call.callId === ask.callId).length === 1))
+
+    // Same text/arguments but new session: no memory carries across.
+    model.script('memory-session', [step(args)], low)
+    const second = await runCase(acp, { workspace, caseName: 'memory-session', prompt: 'Create these disposable markers.', onPermission: reject })
+    check(phase, 'another native session classifies instead of inheriting a grant', second.sessionId !== first.sessionId && classifierCalls(model, 'memory-session').length === 1)
+    const otherWorkspace = join(workspace, 'memory-workspace')
+    mkdirSync(otherWorkspace)
+    model.script('memory-workspace', [step(args)], low)
+    const third = await runCase(acp, { workspace: otherWorkspace, caseName: 'memory-workspace', prompt: 'Create these disposable markers.', onPermission: reject })
+    check(phase, 'new working directory reaches the classifier with the new native workspace', classifierCalls(model, 'memory-workspace').length === 1 && classifierCalls(model, 'memory-workspace')[0].workspacePath === otherWorkspace && approvalChain(dshHome, third.sessionId).decided[0]?.outcome === 'allowed-once')
+
+    // Native host setters change the preset and deployment classifier model mid-turn.
+    // The controller is trusted test code, not evidence of browser UI behavior.
+    model.script('memory-preset', [step(args), step(args), step(args), step(args), step(args)], low)
+    const policy = await runCase(acp, { workspace, caseName: 'memory-preset', prompt: 'Check native preset transitions.', onPermission: reject })
+    const policyChain = approvalChain(dshHome, policy.sessionId)
+    check(phase, 'native preset exit and return discard the old grant', classifierCalls(model, 'memory-preset').length === 2 && policy.permissions.length === 1 && JSON.stringify(policyChain.decided.map(item => item.outcome)) === JSON.stringify(['allowed-once', 'allowed-once', 'rejected', 'allowed-once', 'allowed-once']), policyChain.decided)
+    check(phase, 'preset transition evidence comes from the native durable setter', JSON.stringify(policyChain.events.filter(item => item.type === 'permission/preset').map(item => eventData(item).preset)) === JSON.stringify(['sandboxed-auto', 'workspace-write', 'sandboxed-auto']))
+    model.script('memory-preset-roundtrip', [step(args), step(args), step(args), step(args)], low)
+    const roundtrip = await runCase(acp, { workspace, caseName: 'memory-preset-roundtrip', prompt: 'Check a native permission roundtrip without an intermediate approval.', onPermission: reject })
+    check(phase, 'native permission roundtrip without an intervening request discards the grant', classifierCalls(model, 'memory-preset-roundtrip').length === 2 && roundtrip.permissions.length === 0)
+    model.script('memory-model', [step(args), step(args), step(args), step(args), step(args)], low)
+    const switching = await runCase(acp, { workspace, caseName: 'memory-model', prompt: 'Check deployment classifier model transitions.', onPermission: reject })
+    const selected = classifierCalls(model, 'memory-model').map(item => item.classifierModel)
+    check(phase, 'native deployment model switch and return reclassify under each route', JSON.stringify(selected) === JSON.stringify([MODEL_ID, `${MODEL_ID}-alternate`, MODEL_ID]) && switching.permissions.length === 0, selected)
+
+    // Genuine new user messages in the same session revoke and later reauthorize.
+    const current = await acp.request('session/new', { cwd: workspace, mcpServers: [] })
+    model.setCurrentCase('memory-revoke')
+    const revokeSteps = []
+    const permissions = []
+    acp.onPermission(params => { permissions.push(params); return reject() })
+    const prompt = text => {
+      revokeSteps.push(step(args))
+      model.script('memory-revoke', [...revokeSteps], low)
+      return acp.request('session/prompt', { sessionId: current.sessionId, prompt: [{ type: 'text', text }] })
+    }
+    await prompt('Create this disposable marker.')
+    await prompt('I revoke authorization.')
+    await prompt(`Run: ${args.command}`)
+    // A changed user message invalidates even the newly renewed grant.
+    await prompt('Create this disposable marker again.')
+    const revocation = approvalChain(dshHome, current.sessionId)
+    check(phase, 'revoked grant is rejected natively and renewed consent reclassifies', JSON.stringify(revocation.decided.map(item => item.outcome)) === JSON.stringify(['allowed-once', 'rejected', 'allowed-once', 'rejected']) && permissions.length === 2 && classifierCalls(model, 'memory-revoke').length === 2, revocation.decided)
+    await acp.request('session/close', { sessionId: current.sessionId })
+    model.setCurrentCase(undefined)
+
+    // A downstream manual allowed-once is never promoted into plugin memory.
+    const manualName = 'memory-human'
+    model.script(manualName, [step(args), step(args)], '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}')
+    const human = await runCase(acp, { workspace, caseName: manualName, prompt: 'Create the disposable marker.', onPermission: () => ({ outcome: { outcome: 'selected', optionId: 'allow-once' } }) })
+    check(phase, 'two downstream one-time allowances both require classification and a client response', classifierCalls(model, manualName).length === 2 && human.permissions.length === 2 && approvalChain(dshHome, human.sessionId).decided.every(item => item.outcome === 'allowed-once'))
+
+    // Medium permission on an absent disposable target: no file is deleted.
+    const mediumName = 'memory-medium'
+    const mediumArgs = { ...args, command: 'rm -f memory-absent' }
+    model.script(mediumName, [step(mediumArgs), step(mediumArgs)], evidence => JSON.stringify({ risk: 'medium', verdict: 'approve', reasonCode: 'explicit-user-authorization', authorization: { messageId: evidence.latestUserMessageId, quote: evidence.latestUserMessage } }))
+    model.setCurrentCase(mediumName)
+    const medium = await runCase(acp, { workspace, caseName: mediumName, prompt: '', text: `Run: ${mediumArgs.command}`, onPermission: reject })
+    check(phase, 'medium-risk permission is never cached', classifierCalls(model, mediumName).length === 2 && medium.permissions.length === 0 && approvalChain(dshHome, medium.sessionId).decided.every(item => item.outcome === 'allowed-once'))
+    model.setCurrentCase(undefined)
+  } catch (error) {
+    ok = check(phase, 'memory phase completed', false, String(error?.stack ?? error)) && ok
+  } finally {
+    model.setCurrentCase(undefined)
+    const exit = await acp.shutdown()
+    writeEvidence('acp-memory.transcript.json', acp.transcript)
+    check(phase, 'memory host exits cleanly with every entry activated', exit.exitedCleanly && !/did not activate/.test(acp.stderr()))
+  }
+  return ok && results.filter(result => result.case === phase).every(result => result.passed)
 }
 
 async function disabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {

@@ -82,6 +82,38 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  windows-host:
+    name: Windows DSH host (0.2.0-rc.2, mock)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: |
+          npm install --prefix "$env:RUNNER_TEMP/dsh" --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+          npm install --global --no-audit --no-fund pnpm@10.28.0
+      - name: Run minimal native Windows host check
+        run: >-
+          node scripts/ci-dsh-windows.mjs
+          --dsh "$env:RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --root "$env:RUNNER_TEMP/dsh-windows-host"
+          --evidence "$env:RUNNER_TEMP/dsh-windows-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-windows-host
+          path: ${{ runner.temp }}/dsh-windows-evidence
+          retention-days: 7
+          if-no-files-found: error
+
   # Safety regression gate for the 53 public community cases: the real
   # approval handler with a permissive low/approve mock. A verified
   # manual_required case approved as allowed-once fails this job; labels and

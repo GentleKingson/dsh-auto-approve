@@ -409,3 +409,5 @@ npm run tune -- [--extra-danger-pattern '...'] /path/to/session.jsonl [...]
 
 发布前以及每次升级 DeepSeek Harness 后，请按[验收文档](./docs/ACCEPTANCE.md)完成静态、单元与真机检查。
 
+
+本轮 Auto 可靠性验收增加 G-003-D01 Suite D：仅指定 QA 报告的一次原生升级。真实模型、实际执行和宿主安全独立报告；直连服务商 Key 明确为 `credentialIsolation: NOT_ISOLATED`，不证明生产无人值守安全。详见 [ACCEPTANCE](docs/ACCEPTANCE.md)、[RELIABILITY](docs/RELIABILITY.md) 和 [REAL_PROJECT_CI](docs/REAL_PROJECT_CI.md)。
