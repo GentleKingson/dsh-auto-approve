@@ -177,6 +177,39 @@ export function parseClassifierVerdict(text) {
   return parseClassifierDecision(text)?.verdict
 }
 
+/** Diagnostic clock; a failing clock only drops timing fields, never the outcome. */
+function diagnosticNow() {
+  try {
+    const value = globalThis.performance.now()
+    return Number.isFinite(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Diagnostic only: name why a reply failed parseClassifierDecision, without
+ * echoing any of its text. The verdict is already ask; this never changes it.
+ */
+export function classifierRejection(text) {
+  if (typeof text !== 'string' || text.trim().length === 0) return 'empty'
+  const trimmed = text.trim()
+  if (trimmed.startsWith('```')) return 'code-fence'
+  if (!trimmed.startsWith('{')) return 'prose'
+  if (!CLASSIFIER_RESPONSE.test(trimmed)) return 'grammar'
+  let value
+  try {
+    value = JSON.parse(trimmed)
+  } catch {
+    return 'json'
+  }
+  if (!REASON_CODES.has(value.reasonCode)) return 'unknown-reason-code'
+  if (value.verdict === 'approve' && value.risk === 'high') return 'high-approve'
+  if (value.verdict === 'approve' && value.risk === 'low') return 'low-approve-shape'
+  if (value.verdict === 'approve' && value.risk === 'medium') return 'medium-approve-shape'
+  return 'ask-with-authorization'
+}
+
 /**
  * Read a session's events across two host generations. dsh 0.1.2 replaced the
  * `events` getter with `snapshotEvents()`; both return the same frozen snapshot.
@@ -405,7 +438,7 @@ function nextWithSignal(iterator, signal) {
   })
 }
 
-async function collectClassifierText(llm, options, signal, trackIteratorCleanup) {
+async function collectClassifierText(llm, options, signal, trackIteratorCleanup, timing = {}) {
   const iterator = llm.stream(options)[Symbol.asyncIterator]()
   const blocks = new Map()
   const blockOrder = []
@@ -419,6 +452,7 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup)
   try {
     while (true) {
       const item = await nextWithSignal(iterator, signal)
+      if (timing.firstChunkMs === undefined && timing.started !== undefined) timing.firstChunkMs = Math.round((diagnosticNow() ?? NaN) - timing.started)
       if (item.done) {
         completed = true
         break
@@ -510,7 +544,7 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup)
     .join('')
   const decision = parseClassifierDecision(text)
   return decision === undefined
-    ? { verdict: 'ask', detail: 'invalid-response' }
+    ? { verdict: 'ask', detail: 'invalid-response', invalidShape: classifierRejection(text) }
     : { ...decision, detail: decision.verdict }
 }
 
@@ -538,6 +572,9 @@ async function classify(ctx, req, config, evidence, selection, lifetimeSignal, t
   ]
   let signal
   let timer
+  const timing = { started: diagnosticNow() }
+  const timed = result => timing.started === undefined ? result
+    : ({ ...result, timing: { classifierMs: Math.round((diagnosticNow() ?? NaN) - timing.started), firstChunkMs: timing.firstChunkMs } })
   try {
     signal = AbortSignal.any(signals)
     timer = setTimeout(
@@ -553,20 +590,20 @@ async function classify(ctx, req, config, evidence, selection, lifetimeSignal, t
       sessionId: req.agent.session.id,
       signal,
     })
-    return await collectClassifierText(llm, options, signal, trackIteratorCleanup)
+    return timed(await collectClassifierText(llm, options, signal, trackIteratorCleanup, timing))
   } catch {
     if (signal?.aborted) {
       if (lifetimeSignal?.aborted && signal.reason === lifetimeSignal.reason) {
-        return { verdict: 'ask', detail: 'unloaded' }
+        return timed({ verdict: 'ask', detail: 'unloaded' })
       }
       if (req.signal?.aborted && signal.reason === req.signal.reason) {
-        return { verdict: 'ask', detail: 'aborted' }
+        return timed({ verdict: 'ask', detail: 'aborted' })
       }
       if (timeoutController.signal.aborted && signal.reason === timeoutReason) {
-        return { verdict: 'ask', detail: 'timeout' }
+        return timed({ verdict: 'ask', detail: 'timeout' })
       }
     }
-    return { verdict: 'ask', detail: 'llm-error' }
+    return timed({ verdict: 'ask', detail: 'llm-error' })
   } finally {
     if (timer !== undefined) clearTimeout(timer)
   }
@@ -574,6 +611,21 @@ async function classify(ctx, req, config, evidence, selection, lifetimeSignal, t
 
 function logDecision(ctx, decision, detail) {
   ctx.logger.info(`[dsh-auto-approve] decision=${decision} ${detail}`)
+}
+
+/**
+ * Log-only fields for a classifier call: what the model said when it was
+ * overruled or asked, and how long the call took. Values are validated enums
+ * or numbers, never model text, and they never change the outcome.
+ */
+function classifierDiagnostics(decision) {
+  const fields = []
+  if (decision.risk !== undefined) fields.push(`modelRisk=${decision.risk}`)
+  if (decision.reasonCode !== undefined) fields.push(`modelReason=${decision.reasonCode}`)
+  if (decision.invalidShape !== undefined) fields.push(`invalidShape=${decision.invalidShape}`)
+  if (Number.isFinite(decision.timing?.classifierMs)) fields.push(`classifierMs=${decision.timing.classifierMs}`)
+  if (decision.timing !== undefined) fields.push(`firstChunkMs=${Number.isFinite(decision.timing.firstChunkMs) ? decision.timing.firstChunkMs : 'none'}`)
+  return fields.length === 0 ? '' : ` ${fields.join(' ')}`
 }
 
 function cancellationDetail(req, lifetimeSignal) {
@@ -628,9 +680,9 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       categorized = true
       safelyRecordDecision(recordDecision, req, reportCommand, category, detail, reasonCode, decisionSource)
     }
-    const handoff = (category, reasonCode, decisionSource = 'manual-handoff') => {
+    const handoff = (category, reasonCode, decisionSource = 'manual-handoff', diagnostics = '') => {
       record(category, `verdict=${reasonCode}`, reasonCode, decisionSource)
-      logDecision(ctx, 'manual', `verdict=${reasonCode} reasonCode=${reasonCode} decisionSource=${decisionSource}`)
+      logDecision(ctx, 'manual', `verdict=${reasonCode} reasonCode=${reasonCode} decisionSource=${decisionSource}${diagnostics}`)
       return delegate()
     }
     try {
@@ -687,12 +739,12 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       }
       const memoryKey = compileEvidence === undefined && config.sessionMemory && !config.shadowMode && memory !== undefined && context.selection !== undefined
         ? context.key : undefined
-      const approve = (source, reasonCode, detail, risk) => {
+      const approve = (source, reasonCode, detail, risk, diagnostics = '') => {
         const stale = () => cancellationDetail(req, lifetimeSignal) ?? (contextOf(req).key === context.key ? undefined : 'context-changed')
           ?? (compileEvidence !== undefined && (ctx.get(COMPILE_EVIDENCE_SERVICE) !== compileProvider || !compileEvidence.isCurrent()) ? 'compile-evidence-stale' : undefined)
         const before = stale()
         if (before !== undefined) { memory?.clear(session.id); return handoff('missing-evidence', before) }
-        logDecision(ctx, config.shadowMode ? 'shadow-approve' : 'auto-approve', `${detail} reasonCode=${reasonCode} decisionSource=${source}`)
+        logDecision(ctx, config.shadowMode ? 'shadow-approve' : 'auto-approve', `${detail} reasonCode=${reasonCode} decisionSource=${source}${diagnostics}`)
         const after = stale()
         if (after !== undefined) { memory?.clear(session.id); return handoff('missing-evidence', after) }
         record(config.shadowMode ? 'shadow' : source === 'cache' ? 'cache' : 'auto-approved', detail, reasonCode, source)
@@ -723,13 +775,14 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
         policyVersion: POLICY_VERSION,
         ...(compileEvidence === undefined ? {} : { compileEvidence: compileEvidence.summary }),
       }, context.selection, lifetimeSignal, trackIteratorCleanup))
+      const diagnostics = classifierDiagnostics(decision)
       if (decision.verdict === 'approve') {
-        if (action.minimumRisk === 'medium' && decision.risk === 'low') return handoff('classifier-manual', 'risk-understated', 'model')
-        if (decision.risk === 'medium' && !explicitAuthorization(decision, verified, userMessage, context)) return handoff('classifier-manual', 'authorization-unverified', 'model')
-        return approve('model', decision.reasonCode, 'verdict=approve', decision.risk)
+        if (action.minimumRisk === 'medium' && decision.risk === 'low') return handoff('classifier-manual', 'risk-understated', 'model', diagnostics)
+        if (decision.risk === 'medium' && !explicitAuthorization(decision, verified, userMessage, context)) return handoff('classifier-manual', 'authorization-unverified', 'model', diagnostics)
+        return approve('model', decision.reasonCode, 'verdict=approve', decision.risk, diagnostics)
       }
       if (cancellationDetail(req, lifetimeSignal) !== undefined) memory?.clear(session.id)
-      return handoff('classifier-manual', decision.detail, 'model')
+      return handoff('classifier-manual', decision.detail, 'model', diagnostics)
     } catch (error) {
       if (delegated) throw error
       if (!categorized && autoPreset) record('classifier-manual', 'verdict=internal-error')

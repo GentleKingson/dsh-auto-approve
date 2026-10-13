@@ -664,6 +664,28 @@ test('ask delegates to the human responder', async () => {
   assert.match(app.logs[0], /decision=manual verdict=ask/)
 })
 
+test('ask and overruled approvals log the model risk, reason and timing without changing the outcome', async () => {
+  const ask = harness({ stream: () => textResponse('{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}') })
+  assert.deepEqual(await ask.run(), { result: MANUAL, nextCalls: 1 })
+  assert.match(ask.logs[0], /decision=manual verdict=ask reasonCode=ask decisionSource=model modelRisk=medium modelReason=uncertain classifierMs=\d+ firstChunkMs=\d+$/)
+
+  const approve = harness()
+  assert.deepEqual(await approve.run(), { result: 'allowed-once', nextCalls: 0 })
+  assert.match(approve.logs[0], /decision=auto-approve verdict=approve reasonCode=routine decisionSource=model modelRisk=low modelReason=routine classifierMs=\d+ firstChunkMs=\d+$/)
+})
+
+test('classifierRejection names the shape of an unusable reply without echoing it', () => {
+  const { classifierRejection } = plugin
+  assert.equal(classifierRejection(''), 'empty')
+  assert.equal(classifierRejection('```json\n{"verdict":"approve"}\n```'), 'code-fence')
+  assert.equal(classifierRejection('Looks safe to me.'), 'prose')
+  assert.equal(classifierRejection('{"verdict":"approve","why":"safe"}'), 'grammar')
+  assert.equal(classifierRejection('{"risk":"low","verdict":"approve","reasonCode":"vibes"}'), 'unknown-reason-code')
+  assert.equal(classifierRejection('{"risk":"high","verdict":"approve","reasonCode":"routine"}'), 'high-approve')
+  assert.equal(classifierRejection('{"risk":"low","verdict":"approve","reasonCode":"destructive"}'), 'low-approve-shape')
+  assert.equal(classifierRejection('{"risk":"medium","verdict":"approve","reasonCode":"routine"}'), 'medium-approve-shape')
+})
+
 test('strict verdict parsing rejects garbage and extra fields', async (t) => {
   assert.equal(parseClassifierVerdict('{"risk":"low","verdict":"approve","reasonCode":"routine"}'), 'approve')
   assert.equal(parseClassifierVerdict(' {"risk":"medium","verdict":"ask","reasonCode":"uncertain"}\n'), 'ask')
@@ -681,7 +703,8 @@ test('strict verdict parsing rejects garbage and extra fields', async (t) => {
     await t.test(response, async () => {
       const app = harness({ stream: () => textResponse(response) })
       assert.deepEqual(await app.run(), { result: MANUAL, nextCalls: 1 })
-      assert.match(app.logs[0], /decision=manual verdict=invalid-response/)
+      assert.match(app.logs[0], /decision=manual verdict=invalid-response .*invalidShape=[a-z-]+ classifierMs=\d+ firstChunkMs=\d+$/)
+      assert.doesNotMatch(app.logs[0], /safe|not json/)
     })
   }
 })
@@ -712,7 +735,7 @@ test('timeout delegates before a hanging iterator cleanup, which unload still dr
   await returnStarted
   assert.deepEqual(await pending, { result: MANUAL, nextCalls: 1 })
   assert.equal(returnCalls, 1)
-  assert.match(app.logs[0], /decision=manual verdict=timeout/)
+  assert.match(app.logs[0], /decision=manual verdict=timeout .*classifierMs=\d+ firstChunkMs=none$/)
 
   let disposeSettled = false
   const disposing = app.dispose().then(() => { disposeSettled = true })

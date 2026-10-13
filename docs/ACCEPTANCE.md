@@ -1,5 +1,9 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-13：自动审核可靠性观测与重复采样
+
+详见 [RELIABILITY.md](./RELIABILITY.md)。插件只在日志里追加模型的 risk/reasonCode、无效回复形态与分类耗时，审批结果、阈值、规则与 `POLICY_VERSION` 不变。community 驱动新增 `--repeat` 与 6 个配对对照案例，摘要给出逐案例翻转与带置信区间的比率；真实模型运行仍只在 main 手动触发。
+
 ## 2026-10-12：公开社区案例（53 条、28 个来源）
 
 详见 [COMMUNITY_CASES.md](./COMMUNITY_CASES.md)。未改生产审批代码。来源正文 SHA-256 与 53 条摘录行号已在线核对；标签 0 改动、2 条存疑。离线宽松 Mock：38 条计分中已核实人工案例误批 6 条（tar 解包、git merge、`git checkout -- .`、`ls ~/.ssh/`、`tail ~/.bash_history`、`sudo`），离线门禁为 FAIL，根因与最小复现见该文档。Live Shadow 30 条使用替换 bash 执行器与文件写入口的惰性驱动，五个对照通过后才运行案例。

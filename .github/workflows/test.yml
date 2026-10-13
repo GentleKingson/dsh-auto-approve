@@ -140,9 +140,10 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      # Two rounds plus the paired controls prove --repeat and --controls wiring; verdicts are scripted.
       - name: Community cases through the inert executor
         run: >-
-          node scripts/ci-dsh-live-community.mjs --classifier mock
+          node scripts/ci-dsh-live-community.mjs --classifier mock --controls --repeat 2
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-community"
           --evidence "$RUNNER_TEMP/dsh-community-summary"
