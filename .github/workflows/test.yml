@@ -82,6 +82,53 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Deployment smoke for the Web client: `npm pack` of this commit installed
+  # through the pinned DSH plugin manager into a fresh DSH_HOME, real `dsh web`
+  # driven by pinned Playwright Chromium (presets, an automatic approval, a
+  # manual rejection), then uninstall and native recovery. Model responses are
+  # scripted; no secret is used. Evidence holds no login token, cookie, trace,
+  # screenshot or raw session log. See docs/ACCEPTANCE.md.
+  web-smoke:
+    name: web smoke (0.2.0-rc.2, Chromium, packed tarball)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+      PLAYWRIGHT_VERSION: 1.56.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      # No npm ci: the installed plugin must run from the tarball alone.
+      - name: Install pinned DSH, pnpm and Playwright Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+          npm install --prefix "$RUNNER_TEMP/pw" --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Run Web smoke
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          node scripts/ci-dsh-web-smoke.mjs
+          --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --playwright "$RUNNER_TEMP/pw/node_modules/playwright"
+          --root "$RUNNER_TEMP/dsh-web-smoke"
+          --evidence "$RUNNER_TEMP/dsh-web-smoke-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-web-smoke-evidence-${{ env.DSH_VERSION }}
+          path: ${{ runner.temp }}/dsh-web-smoke-evidence
+          if-no-files-found: error
+          retention-days: 30
+
   windows-host:
     name: Windows DSH host (0.2.0-rc.2, mock)
     runs-on: windows-latest

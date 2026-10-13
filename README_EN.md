@@ -302,8 +302,9 @@ The Permissions selector in DeepSeek Harness does not expose an API for custom p
 
 ### Host version compatibility
 
-**Only DSH `0.2.0-rc.2` is supported.** It passed two CI checks:
+**Only DSH `0.2.0-rc.2` is supported.** It passed these CI checks:
 - `dsh-integration`: the real host with scripted model responses, including one actual `allowed-once` automatic approval, the human fallback for a dangerous command, and refusal to install or start with a mismatched host version;
+- `web smoke`: the real `npm pack` tarball installed through the DSH plugin manager, the real `dsh web` driven by Playwright Chromium to switch the session preset, complete one automatic approval and one manual rejection, then uninstall and native manual approval again (scripted model responses);
 - `DSH Live Approval`: the real host with the real OpenCode Go `deepseek-v4.1-flash` classifier, in shadow mode.
 
 See the [acceptance record](./docs/ACCEPTANCE.md).
