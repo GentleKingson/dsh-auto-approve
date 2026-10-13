@@ -270,7 +270,7 @@ export async function livePhase({ options, suite, model, env, dshHome, workspace
   out.approvalCoverage = chain.asked.length === 0 ? 'NOT_EXERCISED' : 'EXERCISED'
   out.allowedOnce = decided.filter(outcome => outcome === 'allowed-once').length
   out.manualOrUnavailableHandoffs = decided.filter(outcome => !String(outcome).startsWith('allowed')).length
-  out.pluginDecisions = decisions.map(item => ({ decision: item.decision, verdict: item.verdict, reasonCode: item.reasonCode, decisionSource: item.decisionSource, modelRisk: item.modelRisk, modelReason: item.modelReason, invalidShape: item.invalidShape, classifierMs: item.classifierMs, firstChunkMs: item.firstChunkMs }))
+  out.pluginDecisions = decisions.map(item => ({ decision: item.decision, verdict: item.verdict, reasonCode: item.reasonCode, decisionSource: item.decisionSource, modelRisk: item.modelRisk, modelReason: item.modelReason, invalidShape: item.invalidShape, classifierMs: item.classifierMs, firstChunkMs: item.firstChunkMs, reasoningChars: item.reasoningChars, outputChars: item.outputChars }))
   out.classifierCalls = decisions.filter(item => item.decisionSource === 'model').length
   out.classifierFailureOrTimeout = decisions.filter(item => MODEL_FAILURES.has(item.verdict) || MODEL_FAILURES.has(item.reasonCode)).length
   check(phase, 'plugin logged one decision per escalation', decisions.length === chain.asked.length, { decisions: decisions.length, asked: chain.asked.length })

@@ -4,7 +4,7 @@
 // scripts/ci-dsh-live.mjs; the cases come from the supplied community casebook.
 //
 //   node scripts/ci-dsh-live-community.mjs --dsh <dsh bin> --root <empty dir> --evidence <dir> [--classifier live|mock]
-//     [--repeat N] [--controls]
+//     [--repeat N] [--controls] [--reasoning-effort <effort>]
 //
 // --classifier live (default) routes the plugin's classifier to OpenCode Go
 // (needs OPENCODE_GO_API_KEY). --classifier mock keeps the scripted local
@@ -26,6 +26,8 @@
 // request flips between verdicts. --controls appends the paired control cases
 // in test/fixtures/approval-reliability-controls-2026-10-13.json (see
 // docs/RELIABILITY.md). Neither changes the plugin config, labels or gates.
+// --reasoning-effort (live only) sets the plugin's reasoningEffort for the
+// classifier call, e.g. low; omitted keeps the provider default.
 //
 // --evidence receives only community-live-summary.json: ids, labels,
 // decisions, reason codes, latencies, header checks and counters. No
@@ -189,7 +191,7 @@ async function runCommunityCase(acp, model, probe, dshHome, entry, review, ctx) 
   const inert = readJsonl(ctx.inertFile).slice(inertBefore).filter(row => row.seam !== 'fs-patched' && row.seam !== 'installed')
   const chain = approvalChain(dshHome, run.sessionId)
   const decisions = rows.filter(row => row.kind === 'decision').map(row => parseDecision(row.text))
-  const parsed = decisions[0] ?? { decision: null, verdict: null, reasonCode: null, decisionSource: null, modelRisk: null, modelReason: null, invalidShape: null, classifierMs: null, firstChunkMs: null }
+  const parsed = decisions[0] ?? { decision: null, verdict: null, reasonCode: null, decisionSource: null, modelRisk: null, modelReason: null, invalidShape: null, classifierMs: null, firstChunkMs: null, reasoningChars: null, outputChars: null }
   const live = rows.filter(row => row.kind === 'http' && row.host === OPENCODE_HOST && row.path === OPENCODE_PATH)
   const otherHttp = rows.filter(row => row.kind === 'http' && !(row.host === OPENCODE_HOST && row.path === OPENCODE_PATH))
   // Only this round's calls; earlier rounds of the same case share its name.
@@ -232,9 +234,11 @@ async function runCommunityCase(acp, model, probe, dshHome, entry, review, ctx) 
     invalidShape: parsed.invalidShape,
     classifierMs: parsed.classifierMs,
     firstChunkMs: parsed.firstChunkMs,
+    reasoningChars: parsed.reasoningChars,
+    outputChars: parsed.outputChars,
     elapsedMs,
     model: ctx.mode === 'live'
-      ? live.map(row => ({ host: row.host, model: row.model, status: row.status ?? null, durationMs: row.durationMs ?? null, sessionHeader: row.sessionHeaderSha256 === null ? 'missing' : row.sessionHeaderSha256 === sha256(run.sessionId) ? 'matches-session' : 'mismatch', ...(row.error === undefined ? {} : { error: clip(row.error, 200) }) }))
+      ? live.map(row => ({ host: row.host, model: row.model, reasoningWire: row.reasoningWire ?? null, status: row.status ?? null, durationMs: row.durationMs ?? null, sessionHeader: row.sessionHeaderSha256 === null ? 'missing' : row.sessionHeaderSha256 === sha256(run.sessionId) ? 'matches-session' : 'mismatch', ...(row.error === undefined ? {} : { error: clip(row.error, 200) }) }))
       : scripted.map(() => ({ host: '127.0.0.1', model: 'ci-mock', verdict: 'low/approve (permissive mock)' })),
     calledOpenCodeGo: live.length > 0,
     executionAttempts: inert.length,
@@ -315,12 +319,16 @@ export function stability(cases) {
     modelFailureRate: wilson(modelRows.filter(item => item.modelError !== null).length, modelRows.length),
     modelFailures: count(modelRows.filter(item => item.modelError !== null).map(item => item.invalidShape === null || item.invalidShape === undefined ? item.modelError : `${item.modelError}:${item.invalidShape}`)),
     timeoutsWithoutFirstChunk: cases.filter(item => item.modelError === 'timeout' && item.firstChunkMs === 'none').length,
+    reasoningChars: (() => {
+      const values = cases.map(item => item.reasoningChars).filter(Number.isFinite).sort((a, b) => a - b)
+      return values.length === 0 ? null : { n: values.length, min: values[0], median: values[Math.floor(values.length / 2)], p90: values[Math.floor(values.length * 0.9)], max: values.at(-1) }
+    })(),
     perCase,
   }
 }
 
 async function main() {
-  const valued = ['--classifier', '--repeat']
+  const valued = ['--classifier', '--repeat', '--reasoning-effort']
   const options = parseArgs(process.argv.slice(2).filter((arg, index, all) => !valued.includes(arg) && !valued.includes(all[index - 1]) && arg !== '--controls'))
   const valueOf = name => { const index = process.argv.indexOf(name); return index > 0 ? process.argv[index + 1] : undefined }
   const mode = valueOf('--classifier') ?? 'live'
@@ -328,6 +336,8 @@ async function main() {
   const repeat = Number(valueOf('--repeat') ?? '1')
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 20) throw new Error('--repeat must be an integer from 1 to 20')
   const withControls = process.argv.includes('--controls')
+  const reasoningEffort = valueOf('--reasoning-effort') ?? null
+  if (reasoningEffort !== null && (mode !== 'live' || !/^[a-z]+$/.test(reasoningEffort))) throw new Error('--reasoning-effort takes a lowercase effort id and needs --classifier live')
   mkdirSync(options.evidence, { recursive: true })
   const summaryFile = join(options.evidence, 'community-live-summary.json')
   const { dshHome, workspace, outside } = prepareRoot(options.root)
@@ -387,6 +397,7 @@ async function main() {
       writeFileSync(patchFile, '[]\n')
       const defaultTree = dumpConfig(options, env, workspace, yamlCodec.parse, 'composed-config-before-user-patch.yml')
       const overrides = deepMerge(mockOverrides(port), mode === 'live' ? liveOverrides : {})
+      if (reasoningEffort !== null) overrides['auto-approve'] = { ...overrides['auto-approve'], reasoningEffort }
       // The real bash executor is disabled; the inert plugin provides `shell` instead.
       overrides['bash-sandbox'] = {}
       writeFileSync(patchFile, `# Written by scripts/ci-dsh-live-community.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, overrides, ['bash-sandbox']))}`)
@@ -394,12 +405,13 @@ async function main() {
       const plugin = configEntry(tree, 'auto-approve')[0]?.config ?? {}
       const composed = name => (Array.isArray(tree) ? tree : []).some(entry => entry?.name === name && entry.disabled !== true)
       effective = {
-        plugin: { provider: plugin.provider ?? null, model: plugin.model ?? null, shadowMode: plugin.shadowMode, sessionMemory: plugin.sessionMemory },
+        plugin: { provider: plugin.provider ?? null, model: plugin.model ?? null, shadowMode: plugin.shadowMode, sessionMemory: plugin.sessionMemory, reasoningEffort: plugin.reasoningEffort ?? null },
         realBashExecutorComposed: configEntry(tree, 'bash-sandbox')[0]?.disabled !== true,
         inertComposed: composed(INERT_NAME),
         probeComposed: composed(PROBE_NAME),
         approval: configEntry(tree, 'approval')[0]?.config ?? null,
       }
+      check('config', `classifier reasoningEffort is ${reasoningEffort ?? 'the provider default'}`, (plugin.reasoningEffort ?? null) === reasoningEffort, effective.plugin)
       check('config', 'shadowMode on and sessionMemory off', plugin.shadowMode === true && plugin.sessionMemory === false, effective.plugin)
       if (mode === 'live') check('config', `classifier route is exactly ${LIVE_PROVIDER} / ${LIVE_MODEL}`, plugin.provider === LIVE_PROVIDER && plugin.model === LIVE_MODEL, effective.plugin)
       check('config', 'real bash executor (bash-sandbox) is disabled', effective.realBashExecutorComposed === false, configEntry(tree, 'bash-sandbox'))
@@ -455,6 +467,7 @@ async function main() {
     notEvidenceOf: ['production false-approval rate (30 non-random cases)', 'actual automatic approval (shadowMode on)', 'Web/Desktop/TUI clients'],
     repeat,
     controls: controls.length,
+    reasoningEffort,
     versions: versions === undefined ? null : { date: versions.date, node: versions.node, dsh: versions.dsh, plugin: versions.plugin },
     effective,
     boundary: { verified: boundaryOk, controls: 5, executionAttemptsDuringCases: cases.reduce((sum, item) => sum + (item.executionAttempts ?? 0), 0), controlAttempts: totalAttempts - cases.reduce((sum, item) => sum + (item.executionAttempts ?? 0), 0) },

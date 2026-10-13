@@ -23,6 +23,11 @@ on:
         description: community-30 only. Append the paired reliability control cases
         type: boolean
         default: false
+      reasoning_effort:
+        description: community-30 only. Classifier reasoning effort (default keeps the provider's)
+        type: choice
+        options: [default, low]
+        default: default
 
 permissions:
   contents: read
@@ -78,10 +83,11 @@ jobs:
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           REPEAT: ${{ inputs.repeat || '1' }}
           CONTROLS: ${{ inputs.controls && 'yes' || '' }}
+          EFFORT: ${{ inputs.reasoning_effort != 'default' && inputs.reasoning_effort || '' }}
         run: |
           test -n "${OPENCODE_GO_API_KEY:-}" || { echo "::error::OPENCODE_GO_API_KEY is not configured"; exit 1; }
           node scripts/ci-dsh-live-community.mjs --classifier live \
-            --repeat "$REPEAT" ${CONTROLS:+--controls} \
+            --repeat "$REPEAT" ${CONTROLS:+--controls} ${EFFORT:+--reasoning-effort "$EFFORT"} \
             --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js" \
             --root "$RUNNER_TEMP/dsh-live" \
             --evidence "$RUNNER_TEMP/dsh-live-summary"
@@ -90,7 +96,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-live-summary-${{ inputs.suite || 'fixed-5' }}
+          name: dsh-live-summary-${{ inputs.suite || 'fixed-5' }}${{ inputs.reasoning_effort == 'low' && '-low' || '' }}
           path: ${{ runner.temp }}/dsh-live-summary
           retention-days: 7
           if-no-files-found: error

@@ -667,11 +667,51 @@ test('ask delegates to the human responder', async () => {
 test('ask and overruled approvals log the model risk, reason and timing without changing the outcome', async () => {
   const ask = harness({ stream: () => textResponse('{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}') })
   assert.deepEqual(await ask.run(), { result: MANUAL, nextCalls: 1 })
-  assert.match(ask.logs[0], /decision=manual verdict=ask reasonCode=ask decisionSource=model modelRisk=medium modelReason=uncertain classifierMs=\d+ firstChunkMs=\d+$/)
+  assert.match(ask.logs[0], /decision=manual verdict=ask reasonCode=ask decisionSource=model modelRisk=medium modelReason=uncertain classifierMs=\d+ firstChunkMs=\d+ reasoningChars=0 outputChars=\d+$/)
 
   const approve = harness()
   assert.deepEqual(await approve.run(), { result: 'allowed-once', nextCalls: 0 })
-  assert.match(approve.logs[0], /decision=auto-approve verdict=approve reasonCode=routine decisionSource=model modelRisk=low modelReason=routine classifierMs=\d+ firstChunkMs=\d+$/)
+  assert.match(approve.logs[0], /decision=auto-approve verdict=approve reasonCode=routine decisionSource=model modelRisk=low modelReason=routine classifierMs=\d+ firstChunkMs=\d+ reasoningChars=0 outputChars=\d+$/)
+})
+
+function reasoningThenText(reasoning, text) {
+  return (async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'reasoning' }
+    for (let at = 0; at < reasoning.length; at += 4000) yield { type: 'reasoning-delta', index: 0, text: reasoning.slice(at, at + 4000) }
+    yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: reasoning } }
+    yield { type: 'block-start', index: 1, blockType: 'text' }
+    yield { type: 'text-delta', index: 1, text }
+    yield { type: 'block-end', index: 1, block: { type: 'text', text } }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+}
+
+test('only the answer text counts toward the size limit; reasoning is measured but never parsed', async () => {
+  const long = harness({ stream: () => reasoningThenText('r'.repeat(20_000), '{"risk":"low","verdict":"approve","reasonCode":"routine"}') })
+  assert.deepEqual(await long.run(), { result: 'allowed-once', nextCalls: 0 })
+  assert.match(long.logs[0], /reasoningChars=20000 outputChars=\d+$/)
+
+  // Reasoning that looks like an approval is ignored; the answer decides.
+  const ask = harness({ stream: () => reasoningThenText('{"risk":"low","verdict":"approve","reasonCode":"routine"}', '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}') })
+  assert.deepEqual(await ask.run(), { result: MANUAL, nextCalls: 1 })
+
+  // A text block is counted once, not once per delta and again at block-end.
+  const mid = harness({ stream: () => textResponse('x'.repeat(9_000)) })
+  assert.deepEqual(await mid.run(), { result: MANUAL, nextCalls: 1 })
+  assert.match(mid.logs[0], /verdict=invalid-response .*outputChars=9000$/)
+
+  const tooLong = harness({ stream: () => textResponse('x'.repeat(16_001)) })
+  assert.deepEqual(await tooLong.run(), { result: MANUAL, nextCalls: 1 })
+  assert.match(tooLong.logs[0], /verdict=response-too-long /)
+})
+
+test('reasoningEffort is forwarded only when configured', async () => {
+  const unset = harness()
+  await unset.run()
+  assert.equal('reasoningEffort' in unset.lastLlmOptions, false)
+  const low = harness({ config: { reasoningEffort: 'low' } })
+  assert.deepEqual(await low.run(), { result: 'allowed-once', nextCalls: 0 })
+  assert.equal(low.lastLlmOptions.reasoningEffort, 'low')
 })
 
 test('classifierRejection names the shape of an unusable reply without echoing it', () => {
@@ -703,7 +743,7 @@ test('strict verdict parsing rejects garbage and extra fields', async (t) => {
     await t.test(response, async () => {
       const app = harness({ stream: () => textResponse(response) })
       assert.deepEqual(await app.run(), { result: MANUAL, nextCalls: 1 })
-      assert.match(app.logs[0], /decision=manual verdict=invalid-response .*invalidShape=[a-z-]+ classifierMs=\d+ firstChunkMs=\d+$/)
+      assert.match(app.logs[0], /decision=manual verdict=invalid-response .*invalidShape=[a-z-]+ classifierMs=\d+ firstChunkMs=\d+ reasoningChars=0 outputChars=\d+$/)
       assert.doesNotMatch(app.logs[0], /safe|not json/)
     })
   }
@@ -735,7 +775,7 @@ test('timeout delegates before a hanging iterator cleanup, which unload still dr
   await returnStarted
   assert.deepEqual(await pending, { result: MANUAL, nextCalls: 1 })
   assert.equal(returnCalls, 1)
-  assert.match(app.logs[0], /decision=manual verdict=timeout .*classifierMs=\d+ firstChunkMs=none$/)
+  assert.match(app.logs[0], /decision=manual verdict=timeout .*classifierMs=\d+ firstChunkMs=none reasoningChars=0 outputChars=0$/)
 
   let disposeSettled = false
   const disposing = app.dispose().then(() => { disposeSettled = true })
