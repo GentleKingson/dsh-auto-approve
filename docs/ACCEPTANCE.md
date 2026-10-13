@@ -1,5 +1,22 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-13：最小 Web 客户端与部署验收（W01–W04）
+
+起始 main：`d588b0c02a80106329de15d8c69569a05f598f0e`；宿主 DSH `0.2.0-rc.2`、pnpm `10.28.0`、Playwright `1.56.1` Chromium、Node 24、Ubuntu 24.04；策略 `approval-v6` 与 G07 缓存权限回切修复不变，运行时代码未修改。新增 `test.yml` 的 `web-smoke` 作业（`scripts/ci-dsh-web-smoke.mjs`），不需要任何 Secret，模型响应来自 `ci-dsh-integration.mjs` 的本地脚本化端点。
+
+| 工作包 | 终态 | 事实 |
+| --- | --- | --- |
+| W01 候选包安装 | IMPLEMENTED | 真实 `npm pack`（非 dry-run）；全新 `DSH_HOME` 中由 `dsh plugin --profile web add <tgz>` 安装，profile 依赖为 `file:…tgz`、安装目录不是符号链接。package.json、index.js、danger-patterns.js、client.js、cordis.patch.yml、compile-evidence.js 的源码/tarball/安装副本 SHA-256 一致；安装代码含 `approval-v6` 与 G07 `permissionRevision`。组合配置中插件仅一次且启用，`sandboxed-auto` 为 `workspace-write + ask`，其他官方预设与默认预设和未安装时完全相同。 |
+| W02 真实浏览器 | IMPLEMENTED | `dsh web --no-open --host 127.0.0.1 --port 0`；一次性 URL 只在内存中使用，登录后地址栏不含 token，Cookie 为 HttpOnly + SameSite=Strict，无 Cookie 的 API 请求被拒。浏览器通过目录对话框选择隔离 Workspace，权限菜单列出 Sandboxed Auto 与三个官方档位且插件客户端图标生效。界面 `sandboxed-auto → workspace-write → sandboxed-auto` 每次都对应来源为 user 的 `/permission` 命令和原生 `permission/preset`；用户层未新增 permission 条目，默认预设不变，新 Session 仍为 Workspace Write。 |
+| W03 自动批准 | IMPLEMENTED | Web 标准 Agent Preset 向脚本模型提供带 `sandbox_permissions` 的 bash/write/edit。浏览器发送任务后：真实 bash `tool/call`、唯一绑定的 `approval/asked`、`allowed-once`、成功 `tool/result`、沙箱外文件创建，整个回合未出现审批面板。切到 Workspace Write 后同类请求不调用分类器而出现原生面板并被拒绝；切回后分类器再次判定并自动批准。 |
+| W03 人工兜底 | IMPLEMENTED | 新 Session 选 Sandboxed Auto 后请求 `rm -rf` 一次性受保护目录；分类器脚本给出 low/approve，但本地规则先转人工（分类器调用 0）。浏览器出现原生审批面板，Playwright 点击 Reject：`approval/decided=rejected`，callId 与 `tool/call` 一致，`tool/result` 为错误，受保护文件内容不变。 |
+| 取消 | WEB_CANCEL_NOT_VERIFIED | Web 审批面板只有 Reject / Allow once，待审批时停止按钮不可见；没有稳定的界面取消入口，因此不制造取消结果。ACP 取消仍由 `dsh-integration` 覆盖。 |
+| W04 卸载与恢复 | IMPLEMENTED | 关闭 Web 后 `dsh plugin --profile web remove dsh-auto-approve`；依赖、bundle 与安装目录移除，组合配置无插件、无 `sandboxed-auto`，官方预设与安装前一致。同一 Home 重启、新浏览器上下文和新 Session：菜单无 Sandboxed Auto、无插件图标；请求不调用分类器，原生面板出现，点击 Reject 后未产生文件。 |
+
+结论：PACKAGE_INSTALL_PASS、WEB_CLIENT_PASS、WEB_AUTO_APPROVAL_PASS、WEB_MANUAL_FALLBACK_PASS、WEB_RECOVERY_PASS 与 DEPLOYMENT_SMOKE_PASS 以 CI 作业的 `assertions.json` 为准；任一阶段未运行到结尾即不算通过。证据只含断言、哈希、组合配置和筛选后的原生事件，不含登录 token、Cookie、浏览器 Trace、截图或原始 Session 日志。
+
+保留边界：G01 宿主控制面 EXTERNAL_BLOCKED；Suite D 真实模型闭环 SUITE_D_NOT_PROVEN（本作业为脚本化模型）；Desktop/TUI NOT_VERIFIED；npm Registry 正式发布包 NOT_TESTED（只测本提交的 tarball）；生产无人值守安全 NO-GO。回滚：还原本 PR 的 Squash 提交即可删除该作业与脚本，不影响运行时代码。
+
 ## 2026-10-13：G01–G11 最终闭环
 
 本节是当前终态；下文保留的 P1/P2/P3、早期版本与 PR 状态均为历史记录。起始 main：`c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`；首轮实现：`1969e568fd75d834aac6b0554bf485af3bcda52d`（[PR #15](https://github.com/GentleKingson/dsh-auto-approve/pull/15) Squash）；最终 Live 基线：`78a711208ca405f5e4d7db66bb89866a4d88ef24`（[PR #16](https://github.com/GentleKingson/dsh-auto-approve/pull/16) Squash）。最终 main 为[本验收 PR #17](https://github.com/GentleKingson/dsh-auto-approve/pull/17) 的 Squash 提交，合并后在最终交付中列出完整 SHA；文档提交不改变被测运行时代码。

@@ -300,8 +300,9 @@ DeepSeek Harness 的 Permissions 选择器尚未提供自定义预设图标 API�
 
 ### 宿主版本兼容
 
-**当前仅支持 DSH `0.2.0-rc.2`。** 该版本已通过两项 CI：
+**当前仅支持 DSH `0.2.0-rc.2`。** 该版本已通过以下 CI：
 - `dsh-integration`：真实宿主 + 受控模型响应，含一次实际 `allowed-once` 自动批准、危险操作人工兜底，以及版本不匹配时的安装/启动拒绝；
+- `web smoke`：`npm pack` 生成的真实 tarball 经 DSH 插件管理器安装，真实 `dsh web` + Playwright Chromium 在界面中切换会话权限、完成一次自动批准和一次人工拒绝，卸载后原生人工审批恢复（模型响应受控）；
 - `DSH Live Approval`：真实宿主 + OpenCode Go `deepseek-v4.1-flash` 真实分类模型，Shadow 模式。
 
 结果见[验收文档](./docs/ACCEPTANCE.md)。
