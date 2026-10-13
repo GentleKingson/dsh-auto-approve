@@ -47,6 +47,11 @@ export const GATEWAY_URL_ENV = 'DSH_CI_GATEWAY_URL'
 export const TOKEN_ENV = 'DSH_CI_RUN_TOKEN'
 export const MODEL_ENV = 'DSH_CI_GATEWAY_MODEL'
 export const GATEWAY_PROVIDER = 'ci-gateway'
+// --allow-direct-provider: DSH's built-in OpenCode Go provider with the real
+// key in DSH_CI_RUN_TOKEN. The agent's shell can read that key; the owner
+// accepts this per run, and the summary says NOT_ISOLATED.
+export const DIRECT_PROVIDER = 'opencode-go'
+export const DIRECT_HOST = 'opencode.ai'
 export const DEFAULT_MODEL = 'deepseek-v4.1-flash'
 export const SUITES = {
   A: { agent: 'gateway', classifier: 'mock', shadowMode: true },
@@ -72,12 +77,13 @@ export const TASK = [
 
 export function parseArgs(argv) {
   const keys = { '--dsh': 'dsh', '--root': 'root', '--evidence': 'evidence', '--project-node': 'projectNode', '--suite': 'suite' }
-  const options = { selfTest: false }
+  const options = { selfTest: false, allowDirectProvider: false }
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index]
     if (name === '--self-test') { options.selfTest = true; continue }
+    if (name === '--allow-direct-provider') { options.allowDirectProvider = true; continue }
     if (keys[name] === undefined || argv[index + 1] === undefined) {
-      throw new Error(`usage: --suite A|B|C ${Object.keys(keys).filter(flag => flag !== '--suite').map(flag => `${flag} <path>`).join(' ')} [--self-test] (bad argument ${JSON.stringify(name)})`)
+      throw new Error(`usage: --suite A|B|C ${Object.keys(keys).filter(flag => flag !== '--suite').map(flag => `${flag} <path>`).join(' ')} [--self-test] [--allow-direct-provider] (bad argument ${JSON.stringify(name)})`)
     }
     options[keys[name]] = name === '--suite' ? argv[index + 1] : resolve(argv[index + 1])
     index += 1
@@ -86,18 +92,21 @@ export function parseArgs(argv) {
     if (options[key] === undefined) throw new Error(`missing ${flag}`)
   }
   if (SUITES[options.suite] === undefined) throw new Error(`--suite must be one of ${Object.keys(SUITES).join(', ')}`)
+  if (options.selfTest && options.allowDirectProvider) throw new Error('--self-test and --allow-direct-provider are exclusive')
   return options
 }
 
 /** Reasons the gateway settings are unsafe to use; empty when they pass. */
-export function gatewayProblems({ url, token, env = process.env }) {
+export function gatewayProblems({ url, token, env = process.env, direct = false }) {
   const problems = []
   let parsed
   try { parsed = new URL(url ?? '') } catch { problems.push(`${GATEWAY_URL_ENV} is not a URL`) }
   if (parsed !== undefined) {
     const host = parsed.hostname.toLowerCase()
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && LOOPBACK.has(host))) problems.push('gateway must be https (plain http only on loopback)')
-    if (UPSTREAM_HOSTS.some(upstream => host === upstream || host.endsWith(`.${upstream}`))) problems.push(`gateway host ${host} is a model provider, not a gateway`)
+    if (direct) {
+      if (host !== DIRECT_HOST) problems.push(`--allow-direct-provider only supports ${DIRECT_HOST}, got ${host}`)
+    } else if (UPSTREAM_HOSTS.some(upstream => host === upstream || host.endsWith(`.${upstream}`))) problems.push(`gateway host ${host} is a model provider, not a gateway (direct use needs --allow-direct-provider)`)
     if (parsed.username !== '' || parsed.password !== '') problems.push('gateway URL must not carry credentials')
   }
   if (typeof token !== 'string' || token.length < 16) problems.push(`${TOKEN_ENV} is missing or shorter than 16 characters`)
@@ -116,8 +125,17 @@ export function liveEnv(base, token) {
   return env
 }
 
-export function liveOverrides({ port, gatewayUrl, model, suite }) {
+export function liveOverrides({ port, gatewayUrl, model, suite, direct = false }) {
   const { acp, ...base } = mockOverrides(port)
+  if (direct) {
+    // Built-in provider keeps its own endpoint, catalog and session headers; only the key source changes.
+    const route = side => (side === 'gateway' ? { provider: DIRECT_PROVIDER, model } : { provider: MODEL_PROVIDER, model: MODEL_ID })
+    return deepMerge(base, {
+      'llm-pi-ai': { providers: { [DIRECT_PROVIDER]: { apiKeyEnv: TOKEN_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 } } } },
+      'agent-default-model': route(suite.agent),
+      'auto-approve': { ...route(suite.classifier), timeoutMs: 45000, shadowMode: suite.shadowMode, sessionMemory: false },
+    })
+  }
   const gateway = { displayName: 'CI model gateway', api: 'openai-completions', baseURL: gatewayUrl, apiKeyEnv: TOKEN_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 }, models: [{ id: model, contextWindow: 131072, maxTokens: 8192, reasoningEfforts: false }] }
   const route = side => (side === 'gateway' ? { provider: GATEWAY_PROVIDER, model } : { provider: MODEL_PROVIDER, model: MODEL_ID })
   return deepMerge(base, {
@@ -266,6 +284,7 @@ async function main() {
     classifier: suite.classifier,
     shadowMode: suite.shadowMode,
     gateway: { host: gatewayHost ?? null, model: modelName, tokenEnv: TOKEN_ENV },
+    credentialIsolation: options.selfTest ? 'NOT_APPLICABLE' : options.allowDirectProvider ? 'NOT_ISOLATED (direct OpenCode Go key, readable by the agent shell; owner opt-in for this run)' : 'GATEWAY (isolation and limits enforced by the gateway)',
     dshVersion: null,
     pluginSourceSha256: null,
     status: 'FAIL',
@@ -274,7 +293,7 @@ async function main() {
 
   let stopped = false
   try {
-    const problems = options.selfTest ? [] : gatewayProblems({ url: gatewayUrl, token })
+    const problems = options.selfTest ? [] : gatewayProblems({ url: gatewayUrl, token, direct: options.allowDirectProvider })
     if (!check('guard', 'gateway settings are safe to use', problems.length === 0, problems)) { stopped = true; throw new Error('gateway guard failed; stopping before any model call') }
     const dshPackageJson = dshPackageJsonOf(options.dsh)
     const yamlCodec = loadYaml(dshPackageJson)
@@ -302,12 +321,12 @@ async function main() {
     const patchFile = join(dshHome, 'profiles', PROFILE, 'cordis.patch.yml')
     writeFileSync(patchFile, '[]\n')
     const defaultTree = dumpConfig(options, env, workspace, yamlCodec.parse, 'composed-config-before-user-patch.yml', PROFILE)
-    const patch = `# Written by scripts/ci-dsh-real-project-live.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, liveOverrides({ port, gatewayUrl, model: modelName, suite })))}`
+    const patch = `# Written by scripts/ci-dsh-real-project-live.mjs for a disposable CI profile.\n${yamlCodec.stringify(userPatch(defaultTree, liveOverrides({ port, gatewayUrl, model: modelName, suite, direct: options.allowDirectProvider })))}`
     writeFileSync(patchFile, patch)
     writeEvidence('cordis.patch.headless.yml', patch)
     const tree = dumpConfig(options, env, workspace, yamlCodec.parse, 'effective-config.yml', PROFILE)
     const routeOf = id => (Array.isArray(tree) ? tree : []).find(entry => entry?.id === id)?.config ?? {}
-    const expectRoute = side => (side === 'mock' || side === 'scripted' ? MODEL_PROVIDER : GATEWAY_PROVIDER)
+    const expectRoute = side => (side === 'mock' || side === 'scripted' ? MODEL_PROVIDER : options.allowDirectProvider ? DIRECT_PROVIDER : GATEWAY_PROVIDER)
     if (!configPhase({ tree, versions, shadowMode: suite.shadowMode })
       || !check('config', `agent model routes to ${expectRoute(suite.agent)}, classifier to ${expectRoute(suite.classifier)}`, routeOf('agent-default-model').provider === expectRoute(suite.agent) && routeOf('auto-approve').provider === expectRoute(suite.classifier), { agent: routeOf('agent-default-model'), classifier: { provider: routeOf('auto-approve').provider, model: routeOf('auto-approve').model } })
       || !check('config', 'probe plugin is composed', (Array.isArray(tree) ? tree : []).some(entry => entry?.name === 'dsh-ci-live-probe' && entry.disabled !== true))) {
