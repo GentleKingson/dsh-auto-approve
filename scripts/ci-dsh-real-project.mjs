@@ -189,18 +189,19 @@ export function headlessOverrides(port) {
   return deepMerge(overrides, { 'auto-approve': { shadowMode: false, sessionMemory: false } })
 }
 
-export function configPhase({ tree, versions, shadowMode = false }) {
+export function configPhase({ tree, versions, shadowMode = false, profile = PROFILE }) {
   const phase = 'config'
   check(phase, `host is exactly DSH ${EXPECTED_DSH}`, versions.dsh === EXPECTED_DSH, versions.dsh)
   const plugins = (Array.isArray(tree) ? tree : []).filter(entry => entry?.name === 'dsh-auto-approve')
-  check(phase, 'dsh-auto-approve is composed exactly once (id auto-approve) in the headless profile', plugins.length === 1 && plugins[0].id === 'auto-approve' && plugins[0].disabled !== true, plugins)
+  check(phase, `dsh-auto-approve is composed exactly once (id auto-approve) in the ${profile} profile`, plugins.length === 1 && plugins[0].id === 'auto-approve' && plugins[0].disabled !== true, plugins)
   const pluginConfig = plugins[0]?.config ?? {}
   check(phase, `effective plugin config: presetName sandboxed-auto, shadowMode ${shadowMode}, sessionMemory false`, pluginConfig.presetName === 'sandboxed-auto' && pluginConfig.shadowMode === shadowMode && pluginConfig.sessionMemory === false, pluginConfig)
   const permission = configEntry(tree, 'permission')[0]?.config ?? {}
   check(phase, 'default preset is sandboxed-auto = workspace-write + ask (not official auto or full access)', permission.defaultPreset === 'sandboxed-auto' && permission.presets?.['sandboxed-auto']?.sandbox === 'workspace-write' && permission.presets?.['sandboxed-auto']?.approval === 'ask', permission)
   check(phase, 'effective approval policy is ask', configEntry(tree, 'approval')[0]?.config?.policy === 'ask', configEntry(tree, 'approval'))
   check(phase, 'effective sandbox policy is workspace-write', configEntry(tree, 'sandbox-policy')[0]?.config?.mode === 'workspace-write', configEntry(tree, 'sandbox-policy'))
-  check(phase, 'headless runner is composed', configEntry(tree, 'headless-runner').length === 1, configEntry(tree, 'headless-runner'))
+  const runner = profile === 'acp' ? 'acp' : 'headless-runner'
+  check(phase, `${profile} runner is composed`, configEntry(tree, runner).length === 1, configEntry(tree, runner))
   writeEvidence('effective-config-summary.json', { plugin: plugins, permission, approval: configEntry(tree, 'approval'), sandboxPolicy: configEntry(tree, 'sandbox-policy') })
   return results.filter(result => result.case === phase).every(result => result.passed)
 }

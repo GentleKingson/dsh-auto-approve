@@ -1,5 +1,7 @@
 # 自动审核可靠性：观测字段与重复采样
 
+首次真实 D 的唯一决定为 medium/explicit-user-authorization；本地因 authorization-unverified 转人工（分类 16603 ms，首事件 1872 ms，无异常/超时）。这说明模型认可宽泛任务授权不等于 approval-v6 已验证精确指令。驱动追加原生精确 Run 消息，保留本地规则与默认推理强度，不反复投票。详见 [REAL_PROJECT_CI](./REAL_PROJECT_CI.md)。
+
 ## 2026-10-13：闭环复核与默认行为
 
 最新 main 起始 `c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`。重新读取 GitHub 原始 job 日志确认：默认推理 run [38361465772](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38361465772) 执行 360 案例、翻转 13、would-auto 120、必须人工的 would-auto 0；low run [38361497099](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38361497099) 执行 360 案例、翻转 15、would-auto 104、必须人工的 would-auto 0。两次各 4258/4258 检查通过。汇总差异不足以证明改变推理强度有收益，保留 `reasoningEffort:null`，不增加投票或放宽阈值。
