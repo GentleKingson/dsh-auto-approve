@@ -1,0 +1,67 @@
+{
+  "note": "Scripted-agent steps for the G-003 mock run, suite B and the live self-test. Deliberately partial: enough for the public npm test, not a reference fix, and it does not reach the hidden judge's 100. It proves the driver and the approval chain, never model ability. Real-agent runs refuse to start while this file is on the runner.",
+  "steps": [
+    {
+      "name": "read",
+      "arguments": {
+        "file_path": "README.md"
+      }
+    },
+    {
+      "name": "read",
+      "arguments": {
+        "file_path": "src/legacy/file-join.mjs"
+      }
+    },
+    {
+      "name": "read",
+      "arguments": {
+        "file_path": "public/view-model.mjs"
+      }
+    },
+    {
+      "role": "test-before",
+      "name": "bash",
+      "arguments": {
+        "command": "npm test",
+        "description": "Run the project tests"
+      }
+    },
+    {
+      "name": "edit",
+      "arguments": {
+        "file_path": "src/legacy/file-join.mjs",
+        "old_string": "  const bag = db.files.filter(x => isPublished(x) && (\n    x.tenantId === opts.tenantId || (what !== 'MASTER' && x.chainId === rootId)\n  ));\n  const found = bag.filter(x => what === 'MASTER'\n    ? (x.tenantId === opts.tenantId && x.ownerType === 'MASTER' && x.ownerId === opts.id)\n    : (x.ownerId === opts.id || x.chainId === rootId || x.ownerId === opts.masterId)\n  );",
+        "new_string": "  const found = db.files.filter(x => isPublished(x) &&\n    x.tenantId === opts.tenantId && x.ownerType === what && x.ownerId === opts.id\n  );"
+      }
+    },
+    {
+      "name": "edit",
+      "arguments": {
+        "file_path": "public/view-model.mjs",
+        "old_string": "    const showFiles = row.attachments && row.attachments.length ? row.attachments : masterAttachments;",
+        "new_string": "    const showFiles = Array.isArray(row.attachments) ? row.attachments : [];"
+      }
+    },
+    {
+      "name": "edit",
+      "arguments": {
+        "file_path": "public/view-model.mjs",
+        "old_string": "      attachmentCount: row.attachmentCount || showFiles.length",
+        "new_string": "      attachmentCount: row.attachmentCount ?? showFiles.length"
+      }
+    },
+    {
+      "role": "test-after",
+      "name": "bash",
+      "arguments": {
+        "command": "npm test",
+        "description": "Re-run the project tests"
+      }
+    }
+  ],
+  "resultSha256": {
+    "src/legacy/file-join.mjs": "6b1d3499ec3672d301cbc16bce0aca2bc5da1572bdd1d4ff15f0f6710ed5878a",
+    "public/view-model.mjs": "8a442238f5f3e45d8176f40e5d3aaf72b2d9ac3f7704443a453a9ec16413eb29"
+  }
+}

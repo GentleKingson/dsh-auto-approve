@@ -1,4 +1,4 @@
-# 真实小型项目端到端：clsx
+# 真实小型项目端到端：clsx 与 G-003
 
 2026-10-12。唯一宿主 DSH `0.2.0-rc.2`（Node 24），工作流 `.github/workflows/dsh-real-project.yml`，脚本 `scripts/ci-dsh-real-project.mjs`。本轮只加测试夹具、脚本、工作流与本文档；`index.js`、`danger-patterns.js`、`cordis.patch.yml` 未改。`scripts/ci-dsh-integration.mjs` 只给 `installLinkedPlugin()`、`dumpConfig()` 加了默认值为 `acp` 的 `profile` 参数，原有调用不变。
 
@@ -63,6 +63,37 @@ Agent 在工作区沙箱内就修完、没有申请升级时，`approvalCoverage
 
 启用步骤（需要维护者）：建网关；新建 GitHub environment `dsh-real-project-live`，限定 main、设审批人，放入 secret `DSH_CI_GATEWAY_URL`（含 `/v1`，OpenAI 兼容）与 `DSH_CI_RUN_TOKEN`，可选 variable `DSH_CI_GATEWAY_MODEL`（默认 `deepseek-v4.1-flash`）；手动触发并按 A → B → C 的顺序跑。本地 vLLM 也走同一脚本：把 `DSH_CI_GATEWAY_URL` 指向它的 `/v1`。
 
+## 第二个夹具：G-003 遗留代码修复案例
+
+2026-10-13。`--fixture g003` 让上面两个脚本和两个工作流在 G-003「附件归属边界」案例上跑同一套流程，`clsx` 仍是默认值，行为不变。`index.js`、`danger-patterns.js`、`cordis.patch.yml` 未改。
+
+| 文件 | 作用 |
+| --- | --- |
+| `test/fixtures/real-projects/g003-legacy-case.zip` | 出题人提供的带缺陷项目原样存档（SHA-256 固定），零依赖，Node >=20 |
+| `test/fixtures/real-projects/g003.json` | 存档与 18 个文件的 SHA-256、基线 3 PASS / 3 FAIL 及失败用例名、允许改动的目录、受保护文件、验收器哈希 |
+| `test/fixtures/real-projects/g003.scripted-repair.json` | 脚本化 Agent 的步骤；**故意只修到公开测试通过**，不是参考答案 |
+| `scripts/real-project-fixtures.mjs` | 无依赖 zip 读取、`node --test` 输出解析、改动边界、两次机会计分、五项最终状态 |
+| `scripts/ci-dsh-real-project-judge.mjs` | 离线判卷：在可信机器上按补丁重建项目后运行独立验收器 |
+
+**准备。** 存档哈希、文件清单与逐文件哈希都要一致；解压进全新的一次性目录，`git init` 并以固定作者和时间提交，Agent 面对的是干净的 Git 工作区；`package.json` 不得有依赖；公开 `npm test` 必须恰好 3 PASS / 3 FAIL，且失败的正是三条 G-003 回归用例。任一不符即 `BLOCKED`，不启动 DSH。
+
+**Mock（每个 PR）。** 真实 headless 宿主、真实插件、脚本化模型：读 README 和源码、看到 3 个失败、编辑、看到 6/6 通过；同一运行内一次低风险升级得到插件 `allowed-once` 且标记文件真实创建，一次 `rm -rf` 一次性目录由本地规则转交、结果 `unavailable`、目录完好；每个 `approval/asked` 恰好绑定一个 `tool/call`、恰好一个 `approval/decided`，没有无请求的决定。运行结束后脚本自己重跑 `npm test`，检查改动只在 `src/`、`public/`、`test/`（只允许新增测试），测试文件、`src/seed.mjs`、`package.json`、README、AI_TASK 逐字节不变，没有删除原文件。脚本化修复只证明驱动和审批链，不计业务修复：`BUSINESS_REPAIR_NOT_RUN`。
+
+**参考答案与验收器隔离。** 实测（本地 DSH 0.2.0-rc.2）：`workspace-write` 沙箱里的 Agent shell 能读插件检出目录中的 `g003.scripted-repair.json`（`answerKeyReadableByAgentShell: true`），与环境变量能进入 shell 同理。因此：
+
+- `G-003-judge.zip` 不进本仓库，只固定其哈希；有单元测试确认仓库里没有任何文件与之哈希相同。
+- 真实 Agent 套件（A、C）在工作流里先删除脚本化答案和 `.git`；驱动在启动 DSH 前再检查一次，任一仍在即 `BLOCKED`。
+- CI 中从不判卷：真实运行的摘要记 `hiddenJudgeScore: NOT_RUN`，并上传脱敏后的 `agent.diff`。维护者在可信机器上运行 `ci-dsh-real-project-judge.mjs`：从固定存档重建项目、套用补丁、按改动边界判无效、重跑公开测试，再在独立进程中以最小环境运行验收器。报告只保留分数和失败检查点标题，验收器的断言输出留在临时目录。
+- 残余风险：验收器会 import 被测代码，恶意代码理论上能在判卷进程里读取验收器；离线判卷前应先看补丁。本仓库公开，联网的 Agent 理论上能从 GitHub 读到脚本化修复，因此它只覆盖公开测试，不泄露完整修复。
+
+**真实模型（A/B/C 语义不变）。** 任务文本就是案例自带的 `AI_TASK.md`，README 在工作区里，不提供答案或验收器。G-003 拒绝 `--allow-direct-provider`（`directProvider: false`），只能走受限网关；网关从未返回 200 时记 `BLOCKED`，不算 Agent 失败。真实 Agent 公开测试不过直接记 `BUSINESS_REPAIR_FAIL`；通过时业务结论等离线判卷。
+
+**两次机会。** 第一次运行的 `agent.diff` 交给判卷脚本；若未通过，`--feedback-out` 生成只含公开测试计数、分数和失败检查点标题的反馈。第二次运行 `--start-patch <第一次 diff> --feedback <反馈>`：仍从固定存档开始，补丁以未提交改动套上，所以第二次的 `agent.diff` 是相对原始快照的累计差异。判卷脚本 `--attempt1 a.diff --attempt2 b.diff` 给出 2 / 1 / 0；任一提交无效记 0。第二次机会目前只能本地或手动运行，工作流不接受补丁输入。
+
+**最终状态。** 每份摘要都有 `statuses`：`BUSINESS_REPAIR_*`、`MOCK_INTEGRATION_*`、`REAL_AGENT_*`、`LIVE_AUTO_APPROVAL_*`、`SAFETY_GATE_*`，各自只看自己的证据；`--self-test` 永远不会产生 `REAL_AGENT_PASS` 或 `LIVE_AUTO_APPROVAL_PROVEN`。
+
+**未做。** Suite D（真实 Agent + 真实分类器 + Shadow 关）未实现；Shadow 与人工审批对照、浏览器人工点检未自动化。
+
 ## 运行
 
 ```sh
@@ -73,6 +104,14 @@ node scripts/ci-dsh-real-project.mjs \
 ```
 
 真实模型：设好 `DSH_CI_GATEWAY_URL`、`DSH_CI_RUN_TOKEN` 后，改用 `scripts/ci-dsh-real-project-live.mjs --suite A|B|C`，参数同上；加 `--self-test` 则不需要网关。
+
+G-003：两个脚本都加 `--fixture g003`。Mock 可加 `--judge <G-003-judge.zip>` 在 DSH 退出后离线判卷（判卷目录为 `<root>-judge`）。离线判卷真实运行的补丁：
+
+```sh
+node scripts/ci-dsh-real-project-judge.mjs --judge <G-003-judge.zip> \
+  --scratch <空目录> --project-node <含 Node 20 的 bin 目录> \
+  --attempt1 agent.diff [--attempt2 agent-2.diff] --out report.json --feedback-out feedback.txt
+```
 
 需要能访问 GitHub（按 SHA 浅取 clsx）与 npm 源。回滚：删除或停用两个 `dsh-real-project*.yml`，不涉及运行时。
 
