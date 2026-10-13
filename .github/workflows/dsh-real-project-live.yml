@@ -1,0 +1,76 @@
+name: DSH Real Project Live
+
+# Real model on the pinned clsx fixture through a restricted model gateway.
+# The provider key lives only in the gateway; this job gets the gateway URL
+# and a short-lived, quota-capped run token, which the agent's shell can
+# read. Manual dispatch on main only, in its own environment (not dsh-live,
+# which holds a provider key). See docs/REAL_PROJECT_CI.md for the gateway
+# requirements and suites A/B/C.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: A real agent + scripted classifier (shadow), B scripted agent + real classifier (actual allowed-once), C both real (shadow)
+        type: choice
+        options: [A, B, C]
+        default: A
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-real-project-live
+  cancel-in-progress: false
+
+jobs:
+  real-project-live:
+    name: real project clsx live (suite ${{ inputs.suite }})
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Put DSH_CI_GATEWAY_URL and DSH_CI_RUN_TOKEN on this environment (and
+    # optionally the variable DSH_CI_GATEWAY_MODEL); restrict it to main and
+    # require a reviewer. Never put a provider API key here.
+    environment: dsh-real-project-live
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Record project Node
+        run: echo "PROJECT_NODE_BIN=$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      - name: Real project through the model gateway
+        env:
+          DSH_CI_GATEWAY_URL: ${{ secrets.DSH_CI_GATEWAY_URL }}
+          DSH_CI_RUN_TOKEN: ${{ secrets.DSH_CI_RUN_TOKEN }}
+          DSH_CI_GATEWAY_MODEL: ${{ vars.DSH_CI_GATEWAY_MODEL }}
+        run: >-
+          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}"
+          --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --root "$RUNNER_TEMP/dsh-real-project-live"
+          --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
+          --project-node "$PROJECT_NODE_BIN"
+      # Redacted summary only; transcripts, session logs and the --json stream
+      # stay under $RUNNER_TEMP/dsh-real-project-live.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-real-project-live-${{ inputs.suite }}
+          path: ${{ runner.temp }}/dsh-real-project-live-summary
+          if-no-files-found: error
+          retention-days: 7

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: mock (scripted model, no secrets). A live suite is not available; see docs/REAL_PROJECT_CI.md.
+        description: mock (scripted model, no secrets). Real models run in dsh-real-project-live.yml.
         type: choice
         options: [mock]
         default: mock
@@ -18,6 +18,8 @@ on:
     paths:
       - .github/workflows/dsh-real-project.yml
       - scripts/ci-dsh-real-project.mjs
+      - scripts/ci-dsh-real-project-live.mjs
+      - scripts/ci-dsh-live.mjs
       - scripts/ci-dsh-integration.mjs
       - test/fixtures/real-projects/**
       - index.js
@@ -69,5 +71,52 @@ jobs:
         with:
           name: dsh-real-project-mock
           path: ${{ runner.temp }}/dsh-real-project-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+  # The live driver (scripts/ci-dsh-real-project-live.mjs) with the local
+  # scripted endpoint standing in for the model gateway: wiring, guards and
+  # accounting for suites A/B/C, no secret and no real model.
+  real-project-live-self-test:
+    name: live driver self-test (suite ${{ matrix.suite }}, no model)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [A, B, C]
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+      - name: Record project Node
+        run: echo "PROJECT_NODE_BIN=$(dirname "$(command -v node)")" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
+      - name: Live driver self-test
+        run: >-
+          node scripts/ci-dsh-real-project-live.mjs --self-test --suite "${{ matrix.suite }}"
+          --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+          --root "$RUNNER_TEMP/dsh-real-project-live"
+          --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
+          --project-node "$PROJECT_NODE_BIN"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dsh-real-project-live-self-test-${{ matrix.suite }}
+          path: ${{ runner.temp }}/dsh-real-project-live-summary
           if-no-files-found: error
           retention-days: 30
