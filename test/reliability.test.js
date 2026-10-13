@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFile } from 'node:fs/promises'
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
+import { writeProbe } from '../scripts/ci-dsh-live.mjs'
+import { snapshotDir, snapshotChanges } from '../scripts/real-project-fixtures.mjs'
 import { inspectCommand } from '../danger-patterns.js'
 import { parseDecision } from '../scripts/ci-dsh-live.mjs'
 import { controlEntries, stability, wilson } from '../scripts/ci-dsh-live-community.mjs'
@@ -63,4 +69,45 @@ test('wilson bounds and the stability summary', () => {
   assert.equal(summary.timeoutsWithoutFirstChunk, 1)
   assert.deepEqual(summary.perCase.find(item => item.caseId === 'a').outcomes, { 'model-ask': 1, 'would-auto': 1 })
   assert.deepEqual(summary.perCase.find(item => item.caseId === 'b').outcomes, { 'handoff-destructive': 2 })
+})
+
+
+test('external-file snapshots detect content replacement and symlinks without reading their target', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'qa-snapshot-'))
+  try {
+    writeFileSync(join(dir, 'decoy'), 'keep')
+    const before = snapshotDir(dir)
+    writeFileSync(join(dir, 'decoy'), 'changed')
+    assert.deepEqual(snapshotChanges(before, snapshotDir(dir)), [{ path: 'decoy', change: 'changed' }])
+    rmSync(join(dir, 'decoy'))
+    symlinkSync(join(dir, 'missing-target'), join(dir, 'decoy'))
+    assert.match(snapshotDir(dir).decoy, /^symlink:/)
+    assert.deepEqual(snapshotChanges(before, snapshotDir(dir)), [{ path: 'decoy', change: 'changed' }])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('live host request cap stops the next model fetch before any network call', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'live-limit-'))
+  const oldFetch = globalThis.fetch
+  const oldOut = process.env.CI_LIVE_PROBE_OUT
+  const oldLimit = process.env.CI_LIVE_REQUEST_LIMIT
+  const effects = []
+  let calls = 0
+  try {
+    process.env.CI_LIVE_PROBE_OUT = join(dir, 'probe.jsonl')
+    process.env.CI_LIVE_REQUEST_LIMIT = '1'
+    globalThis.fetch = async () => { calls++; return new Response('ok') }
+    writeProbe(dir)
+    const probe = await import(pathToFileURL(join(dir, 'index.js')).href)
+    probe.apply({ logger: { exporter() {} }, effect(fn) { effects.push(fn()) } })
+    await fetch('https://model.example/v1/chat/completions', { method: 'POST', body: '{"model":"test"}' })
+    await assert.rejects(fetch('https://model.example/v1/chat/completions'), /request limit/)
+    assert.equal(calls, 1)
+  } finally {
+    for (const cleanup of effects) cleanup?.()
+    globalThis.fetch = oldFetch
+    if (oldOut === undefined) delete process.env.CI_LIVE_PROBE_OUT; else process.env.CI_LIVE_PROBE_OUT = oldOut
+    if (oldLimit === undefined) delete process.env.CI_LIVE_REQUEST_LIMIT; else process.env.CI_LIVE_REQUEST_LIMIT = oldLimit
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

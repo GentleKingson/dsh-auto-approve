@@ -100,6 +100,8 @@ function urlOf(input) {
 
 export function apply(ctx) {
   if (!out) throw new Error('CI_LIVE_PROBE_OUT is not set')
+  const requestLimit = Number(process.env.CI_LIVE_REQUEST_LIMIT) || Infinity
+  let requestCount = 0
   ctx.logger.exporter({
     levels: { default: 2 },
     export: message => {
@@ -112,6 +114,10 @@ export function apply(ctx) {
   const wrapped = async (input, init) => {
     const url = urlOf(input)
     if (url === undefined || url.hostname === '127.0.0.1' || url.hostname === 'localhost') return original(input, init)
+    if (++requestCount > requestLimit) {
+      write({ kind: 'request-limit', limit: requestLimit })
+      throw new Error('CI live model request limit reached')
+    }
     const headers = new Headers(typeof input === 'object' && input !== null && 'headers' in input ? input.headers : undefined)
     new Headers(init?.headers ?? {}).forEach((value, key) => headers.set(key, value))
     let model = null

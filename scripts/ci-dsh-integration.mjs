@@ -133,7 +133,8 @@ export function createModelServer() {
       let evidence
       try { evidence = JSON.parse(evidenceText) } catch { evidence = undefined }
       const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(evidence?.latestUserMessage ?? '')?.[1] ?? currentCase ?? 'unknown'
-      const verdict = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
+      const reply = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
+      const verdict = typeof reply === 'function' ? reply(evidence) : reply
       log.push({ kind: 'classifier', case: caseName, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
       stream(res, { text: verdict })
       return
@@ -501,6 +502,8 @@ async function main() {
     writeFileSync(patchFile, autoPatch())
     writeEvidence('cordis.patch.auto.yml', autoPatch())
     failed = !(await autoPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
+    writeFileSync(patchFile, patch(true, { 'auto-approve': { shadowMode: false, sessionMemory: true } }))
+    failed = !(await memoryPhase({ options, model, baseEnv, dshHome, workspace, outside })) || failed
     writeFileSync(patchFile, patch(false))
     writeEvidence('cordis.patch.disabled.yml', patch(false))
     failed = !(await disabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
@@ -830,6 +833,85 @@ async function autoPhase({ options, model, baseEnv, dshHome, workspace, outside,
     check(phase, 'dsh process exited after stdin closed', exit.exitedCleanly, exit)
   }
   return ok
+}
+
+/** Real ACP sessions and native approvals; only model responses are controlled. */
+async function memoryPhase({ options, model, baseEnv, dshHome, workspace, outside }) {
+  const phase = 'session-memory'
+  const acp = startAcp({ dsh: options.dsh, cwd: workspace, env: baseEnv, stderrPath: join(evidenceDir, 'dsh-memory.stderr.log'), label: phase })
+  const low = '{"risk":"low","verdict":"approve","reasonCode":"routine"}'
+  const target = join(outside, 'memory-marker')
+  const args = { command: `touch ${target}`, description: 'Create a disposable memory marker', sandbox_permissions: 'danger-full-access', justification: 'User authorized this disposable marker.' }
+  const step = arguments_ => ({ name: 'bash', arguments: arguments_ })
+  let ok = true
+  try {
+    await acp.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
+    const subdir = join(workspace, 'memory-subdir')
+    mkdirSync(subdir)
+    const name = 'memory-bindings'
+    // Exact replay, new arguments, new workdir, then the original context again.
+    model.script(name, [step(args), step(args), step({ ...args, command: `touch ${target}-other` }), step({ ...args, workdir: subdir }), step(args)], low)
+    const first = await runCase(acp, { workspace, caseName: name, prompt: 'Create these disposable markers.', onPermission: reject })
+    const chain = approvalChain(dshHome, first.sessionId)
+    const classifiers = classifierCalls(model, name)
+    check(phase, 'five native requests all allowed-once with no client prompt', chain.asked.length === 5 && chain.decided.length === 5 && chain.decided.every(item => item.outcome === 'allowed-once') && first.permissions.length === 0, chain.decided)
+    check(phase, 'only exact same-context replay saves a classification; argument and workdir changes reclassify', classifiers.length === 4 && classifiers[0].toolArguments === JSON.stringify(args) && classifiers[1].toolArguments.includes('-other') && classifiers[2].toolArguments.includes('workdir') && classifiers[3].toolArguments === JSON.stringify(args), classifiers)
+    check(phase, 'cached and reclassified approvals remain uniquely bound to native calls', chain.asked.every(ask => chain.calls.filter(call => call.callId === ask.callId).length === 1))
+
+    // Same text/arguments but new session: no memory carries across.
+    model.script('memory-session', [step(args)], low)
+    const second = await runCase(acp, { workspace, caseName: 'memory-session', prompt: 'Create these disposable markers.', onPermission: reject })
+    check(phase, 'another native session classifies instead of inheriting a grant', second.sessionId !== first.sessionId && classifierCalls(model, 'memory-session').length === 1)
+    const otherWorkspace = join(workspace, 'memory-workspace')
+    mkdirSync(otherWorkspace)
+    model.script('memory-workspace', [step(args)], low)
+    const third = await runCase(acp, { workspace: otherWorkspace, caseName: 'memory-workspace', prompt: 'Create these disposable markers.', onPermission: reject })
+    check(phase, 'new working directory reaches the classifier with the new native workspace', classifierCalls(model, 'memory-workspace').length === 1 && classifierCalls(model, 'memory-workspace')[0].workspacePath === otherWorkspace && approvalChain(dshHome, third.sessionId).decided[0]?.outcome === 'allowed-once')
+
+    // Genuine new user messages in the same session revoke and later reauthorize.
+    const current = await acp.request('session/new', { cwd: workspace, mcpServers: [] })
+    model.setCurrentCase('memory-revoke')
+    const revokeSteps = []
+    const permissions = []
+    acp.onPermission(params => { permissions.push(params); return reject() })
+    const prompt = text => {
+      revokeSteps.push(step(args))
+      model.script('memory-revoke', [...revokeSteps], low)
+      return acp.request('session/prompt', { sessionId: current.sessionId, prompt: [{ type: 'text', text }] })
+    }
+    await prompt('Create this disposable marker.')
+    await prompt('I revoke authorization.')
+    await prompt(`Run: ${args.command}`)
+    // A changed user message invalidates even the newly renewed grant.
+    await prompt('Create this disposable marker again.')
+    const revocation = approvalChain(dshHome, current.sessionId)
+    check(phase, 'revoked grant is rejected natively and renewed consent reclassifies', JSON.stringify(revocation.decided.map(item => item.outcome)) === JSON.stringify(['allowed-once', 'rejected', 'allowed-once', 'rejected']) && permissions.length === 2 && classifierCalls(model, 'memory-revoke').length === 2, revocation.decided)
+    await acp.request('session/close', { sessionId: current.sessionId })
+    model.setCurrentCase(undefined)
+
+    // A downstream manual allowed-once is never promoted into plugin memory.
+    const manualName = 'memory-human'
+    model.script(manualName, [step(args), step(args)], '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}')
+    const human = await runCase(acp, { workspace, caseName: manualName, prompt: 'Create the disposable marker.', onPermission: () => ({ outcome: { outcome: 'selected', optionId: 'allow-once' } }) })
+    check(phase, 'two downstream one-time allowances both require classification and a client response', classifierCalls(model, manualName).length === 2 && human.permissions.length === 2 && approvalChain(dshHome, human.sessionId).decided.every(item => item.outcome === 'allowed-once'))
+
+    // Medium permission on an absent disposable target: no file is deleted.
+    const mediumName = 'memory-medium'
+    const mediumArgs = { ...args, command: 'rm -f memory-absent' }
+    model.script(mediumName, [step(mediumArgs), step(mediumArgs)], evidence => JSON.stringify({ risk: 'medium', verdict: 'approve', reasonCode: 'explicit-user-authorization', authorization: { messageId: evidence.latestUserMessageId, quote: evidence.latestUserMessage } }))
+    model.setCurrentCase(mediumName)
+    const medium = await runCase(acp, { workspace, caseName: mediumName, prompt: '', text: `Run: ${mediumArgs.command}`, onPermission: reject })
+    check(phase, 'medium-risk permission is never cached', classifierCalls(model, mediumName).length === 2 && medium.permissions.length === 0 && approvalChain(dshHome, medium.sessionId).decided.every(item => item.outcome === 'allowed-once'))
+    model.setCurrentCase(undefined)
+  } catch (error) {
+    ok = check(phase, 'memory phase completed', false, String(error?.stack ?? error)) && ok
+  } finally {
+    model.setCurrentCase(undefined)
+    const exit = await acp.shutdown()
+    writeEvidence('acp-memory.transcript.json', acp.transcript)
+    check(phase, 'memory host exits cleanly with every entry activated', exit.exitedCleanly && !/did not activate/.test(acp.stderr()))
+  }
+  return ok && results.filter(result => result.case === phase).every(result => result.passed)
 }
 
 async function disabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {

@@ -6,7 +6,7 @@ name: DSH Real Project Live
 # and a short-lived, quota-capped run token, which the agent's shell can
 # read. Manual dispatch on main only, in its own environment (not dsh-live,
 # which holds a provider key). See docs/REAL_PROJECT_CI.md for the gateway
-# requirements and suites A/B/C. G-003's held-out judge never comes near
+# requirements and suites A/B/C/D. G-003's held-out judge never comes near
 # this job: grade the uploaded agent.diff offline.
 
 on:
@@ -20,15 +20,15 @@ on:
       task:
         description: g003 only. case (the case's own AI_TASK.md) or e01 (G-003-E01, which also asks for a QA report in ../qa-artifacts, outside the workspace)
         type: choice
-        options: [case, e01]
+        options: [case, e01, d01]
         default: case
       suite:
-        description: A real agent + scripted classifier (shadow), B scripted agent + real classifier (actual allowed-once), C both real (shadow)
+        description: A real agent + scripted classifier (shadow), B scripted agent + real classifier (actual allowed-once), C both real (shadow), D both real with one authorized D01 delivery
         type: choice
-        options: [A, B, C]
+        options: [A, B, C, D]
         default: A
       allow_direct_provider:
-        description: Use the real OpenCode Go key in DSH_CI_RUN_TOKEN directly (no gateway). The agent's shell can read it; rotate the key afterwards.
+        description: Use the real OpenCode Go key in DSH_CI_RUN_TOKEN directly (no gateway). The agent's shell can read it; credentialIsolation=NOT_ISOLATED.
         type: boolean
         default: false
 
@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 30
     # Put DSH_CI_GATEWAY_URL and DSH_CI_RUN_TOKEN on this environment (and
     # optionally the variable DSH_CI_GATEWAY_MODEL); restrict it to main and
-    # require a reviewer. Never put a provider API key here.
+    # require a reviewer. Direct provider key use requires explicit per-run opt-in.
     environment: dsh-real-project-live
     env:
       DSH_VERSION: 0.2.0-rc.2
@@ -81,13 +81,17 @@ jobs:
           DSH_CI_GATEWAY_URL: ${{ secrets.DSH_CI_GATEWAY_URL }}
           DSH_CI_RUN_TOKEN: ${{ secrets.DSH_CI_RUN_TOKEN }}
           DSH_CI_GATEWAY_MODEL: ${{ vars.DSH_CI_GATEWAY_MODEL }}
+          LIVE_SUITE: ${{ inputs.suite }}
+          LIVE_FIXTURE: ${{ inputs.fixture }}
+          LIVE_TASK: ${{ inputs.task }}
+          LIVE_DIRECT_FLAG: ${{ inputs.allow_direct_provider && '--allow-direct-provider' || '' }}
         run: >-
-          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}" --fixture "${{ inputs.fixture }}" --task "${{ inputs.task }}"
+          node scripts/ci-dsh-real-project-live.mjs --suite "$LIVE_SUITE" --fixture "$LIVE_FIXTURE" --task "$LIVE_TASK"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project-live"
           --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
           --project-node "$PROJECT_NODE_BIN"
-          ${{ inputs.allow_direct_provider && '--allow-direct-provider' || '' }}
+          $LIVE_DIRECT_FLAG
       # Redacted summary (and, for g003, the redacted agent.diff) only;
       # transcripts, session logs and the --json stream stay under
       # $RUNNER_TEMP/dsh-real-project-live.

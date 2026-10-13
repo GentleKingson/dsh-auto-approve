@@ -1,5 +1,15 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-13：Auto 最终闭环的验收边界
+
+起始 main 为 `c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`，DSH 固定 `0.2.0-rc.2`，策略仍为 `approval-v6`。Suite D 的具体约束见 [REAL_PROJECT_CI.md](./REAL_PROJECT_CI.md)，重复 Shadow 复核见 [RELIABILITY.md](./RELIABILITY.md)。本轮自主授权包含在必要 CI 通过后正常 Squash Merge；不修改仓库保护、Secrets 或 Environment 审批，不发布 npm/Release。
+
+验收独立报告：协议兼容、真实模型判断、实际批准及执行、宿主隔离、生产安全。Suite D 自检通过只证明驱动接线；仅真实 Agent 和真实分类器在同次 Live 运行取得正确的 `allowed-once`、真实报告及独立断言，才记 `SUITE_D_PROVEN`。本轮允许直连 Key，直连一律记 `credentialIsolation: NOT_ISOLATED`。
+
+宿主控制面为 `EXTERNAL_BLOCKED`：[上游 #8887](https://github.com/deepseek-ai/deepseek-harness/discussions/8887) 是针对 `0.2.0-rc.2` 的报告，安装包源码的持久化浏览器 HMAC 密钥、可读宿主根目录、未隔离网络与报告链条一致；本轮未执行伪造 Cookie 的利用，不把源码适用性判断称为完整运行复现。该路径不经过本插件 `approval/request`。上游 [SAFETY.md](https://github.com/deepseek-ai/deepseek-harness/blob/d743267388641bc76f17c45ce8b4c231aed1d32c/SAFETY.md) 明确不承诺生产安全。插件不能修复认证、任意 cwd 会话创建或宿主凭据边界。
+
+资料对照：[GitHub Actions 安全](https://docs.github.com/en/actions/reference/security/secure-use) 支持最小 Token 权限、Environment 审批及编码后的密钥保护；[Codex Auto-review](https://developers.openai.com/codex/concepts/sandboxing/auto-review) 保留沙箱边界并对指定升级逐次审核；[Claude Code Auto](https://code.claude.com/docs/en/auto-mode-config) 也区分无有效判定、模型拒绝和用户重试。这些是外部设计依据，不能证明 DSH 具备相同安全性质。
+
 ## 2026-10-13：自动审核可靠性观测与重复采样
 
 详见 [RELIABILITY.md](./RELIABILITY.md)。插件只在日志里追加模型的 risk/reasonCode、无效回复形态与分类耗时，审批结果、阈值、规则与 `POLICY_VERSION` 不变。community 驱动新增 `--repeat` 与 6 个配对对照案例，摘要给出逐案例翻转与带置信区间的比率；真实模型运行仍只在 main 手动触发。

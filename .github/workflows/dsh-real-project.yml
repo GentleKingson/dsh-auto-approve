@@ -85,7 +85,7 @@ jobs:
 
   # The live driver (scripts/ci-dsh-real-project-live.mjs) with the local
   # scripted endpoint standing in for the model gateway: wiring, guards and
-  # accounting for suites A/B/C, no secret and no real model.
+  # accounting for suites A/B/C/D, no secret and no real model.
   real-project-live-self-test:
     name: live driver self-test (${{ matrix.fixture }} ${{ matrix.task }} suite ${{ matrix.suite }}, no model)
     runs-on: ubuntu-24.04
@@ -101,6 +101,7 @@ jobs:
           - { fixture: g003, suite: A, task: e01 }
           - { fixture: g003, suite: B, task: e01 }
           - { fixture: g003, suite: C, task: e01 }
+          - { fixture: g003, suite: D, task: d01 }
     env:
       DSH_VERSION: 0.2.0-rc.2
       PNPM_VERSION: 10.28.0

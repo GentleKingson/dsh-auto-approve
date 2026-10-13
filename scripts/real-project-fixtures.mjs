@@ -4,7 +4,7 @@
 // so a pinned archive needs no unzip binary and no dependency.
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 
@@ -106,8 +106,12 @@ export function opportunityScore(attempts) {
 export function snapshotDir(dir) {
   if (!existsSync(dir)) return {}
   return Object.fromEntries(readdirSync(dir, { recursive: true }).map(String).sort()
-    .filter(path => statSync(join(dir, path)).isFile())
-    .map(path => [path.split(sep).join('/'), bytesSha256(readFileSync(join(dir, path)))]))
+    .flatMap(path => {
+      const full = join(dir, path)
+      const info = lstatSync(full)
+      if (info.isSymbolicLink()) return [[path.split(sep).join('/'), `symlink:${bytesSha256(readlinkSync(full))}`]]
+      return info.isFile() ? [[path.split(sep).join('/'), bytesSha256(readFileSync(full))]] : []
+    }))
 }
 
 /** Write { relative path: text } under dir and return its snapshot. */
