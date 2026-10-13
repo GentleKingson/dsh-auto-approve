@@ -1,5 +1,7 @@
 # 自动审核可靠性：观测字段与重复采样
 
+最终原生精确授权 D 的分类器返回 medium/ask/uncertain，3176 ms（首事件 1071 ms），无模型失败；人工路径拒绝，实际自动批准 0。首轮 16603 ms 的 authorization-unverified 与第二轮输入不同，不能称为同请求翻转或人工节省。两轮均保留在 [最终 ACCEPTANCE](./ACCEPTANCE.md)，Suite D 为 NOT_PROVEN，停止追加采样。
+
 首次真实 D 的唯一决定为 medium/explicit-user-authorization；本地因 authorization-unverified 转人工（分类 16603 ms，首事件 1872 ms，无异常/超时）。这说明模型认可宽泛任务授权不等于 approval-v6 已验证精确指令。驱动追加原生精确 Run 消息，保留本地规则与默认推理强度，不反复投票。详见 [REAL_PROJECT_CI](./REAL_PROJECT_CI.md)。
 
 ## 2026-10-13：闭环复核与默认行为

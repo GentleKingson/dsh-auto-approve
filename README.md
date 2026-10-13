@@ -411,3 +411,5 @@ npm run tune -- [--extra-danger-pattern '...'] /path/to/session.jsonl [...]
 
 
 本轮 Auto 可靠性验收增加 G-003-D01 Suite D：仅指定 QA 报告的一次原生升级。真实模型、实际执行和宿主安全独立报告；直连服务商 Key 明确为 `credentialIsolation: NOT_ISOLATED`，不证明生产无人值守安全。详见 [ACCEPTANCE](docs/ACCEPTANCE.md)、[RELIABILITY](docs/RELIABILITY.md) 和 [REAL_PROJECT_CI](docs/REAL_PROJECT_CI.md)。
+
+本轮最终验收：两轮真实 Suite D 均安全转人工，`SUITE_D_NOT_PROVEN`；Auto 缓存的权限回切缺口已修复，真实 Linux/Windows 宿主门禁通过。宿主控制面仍 `EXTERNAL_BLOCKED`，真实浏览器兜底 `NOT_VERIFIED`，直连凭据 `NOT_ISOLATED`。详见 [最终验收](docs/ACCEPTANCE.md)。
