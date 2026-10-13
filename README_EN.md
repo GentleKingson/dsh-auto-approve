@@ -412,3 +412,5 @@ npm run tune -- [--extra-danger-pattern '...'] /path/to/session.jsonl [...]
 Before release and after every DeepSeek Harness upgrade, complete the static, unit, and live checks in the [acceptance guide](./docs/ACCEPTANCE.md).
 
 The Auto reliability check adds G-003-D01 Suite D for one explicitly authorized QA delivery. Real-model decisions, actual execution and host safety are reported independently. Direct provider credentials are `credentialIsolation: NOT_ISOLATED`; functional success does not establish production unattended safety. See [ACCEPTANCE](docs/ACCEPTANCE.md), [RELIABILITY](docs/RELIABILITY.md) and [REAL_PROJECT_CI](docs/REAL_PROJECT_CI.md).
+
+Final acceptance: both real Suite D runs handed off safely, so `SUITE_D_NOT_PROVEN`. The Auto memory permission-roundtrip gap is fixed and Linux/Windows host gates pass. Host control-plane isolation remains `EXTERNAL_BLOCKED`, real browser fallback is `NOT_VERIFIED`, and direct credentials are `NOT_ISOLATED`. See [final acceptance](docs/ACCEPTANCE.md).
