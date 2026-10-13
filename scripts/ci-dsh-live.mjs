@@ -169,7 +169,16 @@ export function createProbeReader(file) {
 export function parseDecision(text) {
   const decision = /decision=([a-z-]+)/.exec(text)?.[1] ?? null
   const field = name => new RegExp(`\\b${name}=([A-Za-z0-9-]+)`).exec(text)?.[1] ?? null
-  return { decision, verdict: field('verdict'), reasonCode: field('reasonCode'), decisionSource: field('decisionSource') }
+  const number = name => {
+    const value = field(name)
+    return value !== null && /^\d+$/.test(value) ? Number(value) : value
+  }
+  // modelRisk..firstChunkMs are log-only diagnostics; null when the plugin did not report them.
+  return {
+    decision, verdict: field('verdict'), reasonCode: field('reasonCode'), decisionSource: field('decisionSource'),
+    modelRisk: field('modelRisk'), modelReason: field('modelReason'), invalidShape: field('invalidShape'),
+    classifierMs: number('classifierMs'), firstChunkMs: number('firstChunkMs'),
+  }
 }
 
 // ------------------------------------------------------------------ cases
