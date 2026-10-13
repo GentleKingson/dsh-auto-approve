@@ -86,7 +86,7 @@ Agent 在工作区沙箱内就修完、没有申请升级时，`approvalCoverage
 - CI 中从不判卷：真实运行的摘要记 `hiddenJudgeScore: NOT_RUN`，并上传脱敏后的 `agent.diff`。维护者在可信机器上运行 `ci-dsh-real-project-judge.mjs`：从固定存档重建项目、套用补丁、按改动边界判无效、重跑公开测试，再在独立进程中以最小环境运行验收器。报告只保留分数和失败检查点标题，验收器的断言输出留在临时目录。
 - 残余风险：验收器会 import 被测代码，恶意代码理论上能在判卷进程里读取验收器；离线判卷前应先看补丁。本仓库公开，联网的 Agent 理论上能从 GitHub 读到脚本化修复，因此它只覆盖公开测试，不泄露完整修复。
 
-**真实模型（A/B/C 语义不变）。** 任务文本就是案例自带的 `AI_TASK.md`，README 在工作区里，不提供答案或验收器。G-003 拒绝 `--allow-direct-provider`（`directProvider: false`），只能走受限网关；网关从未返回 200 时记 `BLOCKED`，不算 Agent 失败。真实 Agent 公开测试不过直接记 `BUSINESS_REPAIR_FAIL`；通过时业务结论等离线判卷。
+**真实模型（A/B/C 语义不变）。** 任务文本就是案例自带的 `AI_TASK.md`，README 在工作区里，不提供答案或验收器。与 clsx 一样，维护者可按次打开 `allow_direct_provider` 直连 OpenCode：Key 可被 Agent shell 读取，摘要记 `credentialIsolation: NOT_ISOLATED`，跑完应轮换 Key；不打开时只走受限网关。网关或服务商从未返回 200 时记 `BLOCKED`，不算 Agent 失败。真实 Agent 公开测试不过直接记 `BUSINESS_REPAIR_FAIL`；通过时业务结论等离线判卷。
 
 **两次机会。** 第一次运行的 `agent.diff` 交给判卷脚本；若未通过，`--feedback-out` 生成只含公开测试计数、分数和失败检查点标题的反馈。第二次运行 `--start-patch <第一次 diff> --feedback <反馈>`：仍从固定存档开始，补丁以未提交改动套上，所以第二次的 `agent.diff` 是相对原始快照的累计差异。判卷脚本 `--attempt1 a.diff --attempt2 b.diff` 给出 2 / 1 / 0；任一提交无效记 0。第二次机会目前只能本地或手动运行，工作流不接受补丁输入。
 

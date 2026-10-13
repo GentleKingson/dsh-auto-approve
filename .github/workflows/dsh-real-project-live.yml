@@ -23,7 +23,7 @@ on:
         options: [A, B, C]
         default: A
       allow_direct_provider:
-        description: clsx only (g003 refuses it). Use the real OpenCode Go key in DSH_CI_RUN_TOKEN directly (no gateway). The agent's shell can read it; rotate the key afterwards.
+        description: Use the real OpenCode Go key in DSH_CI_RUN_TOKEN directly (no gateway). The agent's shell can read it; rotate the key afterwards.
         type: boolean
         default: false
 

@@ -20,8 +20,6 @@
     ]
   },
   "taskFile": "AI_TASK.md",
-  "directProvider": false,
-  "directProviderNote": "Live runs on this fixture refuse --allow-direct-provider: a real agent may only reach a model through a restricted gateway.",
   "allowedChangedPrefixes": ["src/", "public/", "test/"],
   "protectedFiles": ["package.json", "src/seed.mjs", "test/baseline.test.mjs", "test/helpers.mjs", "test/regression.test.mjs", "README.md", "AI_TASK.md"],
   "scriptedRepair": "g003.scripted-repair.json",

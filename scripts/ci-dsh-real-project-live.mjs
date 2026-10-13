@@ -336,7 +336,6 @@ async function main() {
   let agentDiff
   try {
     const problems = options.selfTest ? [] : gatewayProblems({ url: gatewayUrl, token, direct: options.allowDirectProvider })
-    if (options.allowDirectProvider && fixture.directProvider === false) problems.push(`--allow-direct-provider is not allowed for the ${fixture.name} fixture; use a restricted gateway`)
     if (!check('guard', 'gateway settings are safe to use', problems.length === 0, problems)) { stopped = true; throw new Error('gateway guard failed; stopping before any model call') }
     // A real agent must not find the scripted answer key, or the history that holds it, anywhere on this runner.
     const keys = suite.agent === 'gateway' && !options.selfTest ? answerKeysPresent(fixture) : []
