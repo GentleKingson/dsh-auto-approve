@@ -87,7 +87,7 @@ jobs:
   # scripted endpoint standing in for the model gateway: wiring, guards and
   # accounting for suites A/B/C, no secret and no real model.
   real-project-live-self-test:
-    name: live driver self-test (${{ matrix.fixture }} suite ${{ matrix.suite }}, no model)
+    name: live driver self-test (${{ matrix.fixture }} ${{ matrix.task }} suite ${{ matrix.suite }}, no model)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -95,6 +95,12 @@ jobs:
       matrix:
         fixture: [clsx, g003]
         suite: [A, B, C]
+        task: [case]
+        # G-003-E01: the same repair plus a QA report delivered outside the workspace.
+        include:
+          - { fixture: g003, suite: A, task: e01 }
+          - { fixture: g003, suite: B, task: e01 }
+          - { fixture: g003, suite: C, task: e01 }
     env:
       DSH_VERSION: 0.2.0-rc.2
       PNPM_VERSION: 10.28.0
@@ -118,7 +124,7 @@ jobs:
           npm install --global --no-audit --no-fund "pnpm@$PNPM_VERSION"
       - name: Live driver self-test
         run: >-
-          node scripts/ci-dsh-real-project-live.mjs --self-test --suite "${{ matrix.suite }}" --fixture "${{ matrix.fixture }}"
+          node scripts/ci-dsh-real-project-live.mjs --self-test --suite "${{ matrix.suite }}" --fixture "${{ matrix.fixture }}" --task "${{ matrix.task }}"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project-live"
           --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
@@ -126,7 +132,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-real-project-live-self-test-${{ matrix.fixture }}-${{ matrix.suite }}
+          name: dsh-real-project-live-self-test-${{ matrix.fixture }}-${{ matrix.task }}-${{ matrix.suite }}
           path: ${{ runner.temp }}/dsh-real-project-live-summary
           if-no-files-found: error
           retention-days: 30

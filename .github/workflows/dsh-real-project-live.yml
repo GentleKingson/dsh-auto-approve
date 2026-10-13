@@ -17,6 +17,11 @@ on:
         type: choice
         options: [clsx, g003]
         default: clsx
+      task:
+        description: g003 only. case (the case's own AI_TASK.md) or e01 (G-003-E01, which also asks for a QA report in ../qa-artifacts, outside the workspace)
+        type: choice
+        options: [case, e01]
+        default: case
       suite:
         description: A real agent + scripted classifier (shadow), B scripted agent + real classifier (actual allowed-once), C both real (shadow)
         type: choice
@@ -36,7 +41,7 @@ concurrency:
 
 jobs:
   real-project-live:
-    name: real project ${{ inputs.fixture }} live (suite ${{ inputs.suite }})
+    name: real project ${{ inputs.fixture }} ${{ inputs.task }} live (suite ${{ inputs.suite }})
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -77,7 +82,7 @@ jobs:
           DSH_CI_RUN_TOKEN: ${{ secrets.DSH_CI_RUN_TOKEN }}
           DSH_CI_GATEWAY_MODEL: ${{ vars.DSH_CI_GATEWAY_MODEL }}
         run: >-
-          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}" --fixture "${{ inputs.fixture }}"
+          node scripts/ci-dsh-real-project-live.mjs --suite "${{ inputs.suite }}" --fixture "${{ inputs.fixture }}" --task "${{ inputs.task }}"
           --dsh "$RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
           --root "$RUNNER_TEMP/dsh-real-project-live"
           --evidence "$RUNNER_TEMP/dsh-real-project-live-summary"
@@ -89,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-real-project-live-${{ inputs.fixture }}-${{ inputs.suite }}
+          name: dsh-real-project-live-${{ inputs.fixture }}-${{ inputs.task }}-${{ inputs.suite }}
           path: ${{ runner.temp }}/dsh-real-project-live-summary
           if-no-files-found: error
           retention-days: 7

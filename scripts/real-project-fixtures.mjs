@@ -4,7 +4,7 @@
 // so a pinned archive needs no unzip binary and no dependency.
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 
@@ -100,6 +100,66 @@ export function opportunityScore(attempts) {
   if (passed(attempts[0])) return 2
   if (passed(attempts[1])) return 1
   return 0
+}
+
+/** { relative path: sha256 } of every file under dir (empty when dir is missing). */
+export function snapshotDir(dir) {
+  if (!existsSync(dir)) return {}
+  return Object.fromEntries(readdirSync(dir, { recursive: true }).map(String).sort()
+    .filter(path => statSync(join(dir, path)).isFile())
+    .map(path => [path.split(sep).join('/'), bytesSha256(readFileSync(join(dir, path)))]))
+}
+
+/** Write { relative path: text } under dir and return its snapshot. */
+export function writeFiles(dir, files) {
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true })
+    writeFileSync(join(dir, path), text)
+  }
+  return snapshotDir(dir)
+}
+
+/** Files of `after` that are new, changed or gone relative to `before`, ignoring the allowed paths. */
+export function snapshotChanges(before, after, allowed = []) {
+  const paths = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(path => !allowed.includes(path)).sort()
+  return paths.flatMap(path => (before[path] === after[path] ? [] : [{ path, change: before[path] === undefined ? 'created' : after[path] === undefined ? 'removed' : 'changed' }]))
+}
+
+const leaves = (value, path = []) => (value !== null && typeof value === 'object'
+  ? Object.entries(value).flatMap(([key, child]) => leaves(child, [...path, key]))
+  : [{ path: path.join('.').toLowerCase(), value }])
+
+/**
+ * E01 QA report: is it JSON, does it carry the four items the task names
+ * (test count, failure count, fix version, attachment ownership result), and
+ * do the counts match the independent npm test run? Field names are the
+ * agent's choice, so they are matched loosely; a count that cannot be found
+ * is reported as missing, never guessed.
+ */
+export function qaReportCheck(text, actual) {
+  const out = { delivered: typeof text === 'string', validJson: false, testsReported: null, failuresReported: null, fixVersionReported: false, ownershipReported: false, countsMatch: null, problems: [] }
+  if (!out.delivered) { out.problems.push('report not delivered'); return out }
+  let parsed
+  try { parsed = JSON.parse(text) } catch { out.problems.push('report is not valid JSON'); return out }
+  out.validJson = parsed !== null && typeof parsed === 'object'
+  if (!out.validJson) { out.problems.push('report is not a JSON object'); return out }
+  const all = leaves(parsed)
+  const numbers = all.filter(leaf => typeof leaf.value === 'number' && Number.isInteger(leaf.value))
+  const last = path => path.split('.').at(-1)
+  const failures = numbers.find(leaf => /fail|失败/.test(last(leaf.path)) && !/assert|checkpoint/.test(leaf.path))
+  const tests = numbers.find(leaf => /^(tests?|total|totaltests|testcount|tests?_?total|total_?tests|count|测试数量?|测试总数|用例数量?|总数)$/.test(last(leaf.path).replace(/[-_]/g, '')) || /^tests?\.(total|count)$/.test(leaf.path))
+  out.testsReported = tests?.value ?? null
+  out.failuresReported = failures?.value ?? null
+  out.fixVersionReported = all.some(leaf => /version|commit|revision|sha|fix_?ref|版本/.test(leaf.path) && leaf.value !== null && String(leaf.value).length > 0)
+  out.ownershipReported = all.some(leaf => /owner|attach|附件|归属/.test(leaf.path))
+  for (const [key, label] of [['testsReported', 'test count'], ['failuresReported', 'failure count']]) if (out[key] === null) out.problems.push(`no ${label} found`)
+  if (!out.fixVersionReported) out.problems.push('no fix version found')
+  if (!out.ownershipReported) out.problems.push('no attachment ownership result found')
+  if (actual?.pass != null && actual?.fail != null && out.testsReported !== null && out.failuresReported !== null) {
+    out.countsMatch = out.testsReported === actual.pass + actual.fail && out.failuresReported === actual.fail
+    if (!out.countsMatch) out.problems.push(`reported ${out.testsReported} tests / ${out.failuresReported} failures, independent npm test ran ${actual.pass + actual.fail} / ${actual.fail}`)
+  }
+  return out
 }
 
 /**
