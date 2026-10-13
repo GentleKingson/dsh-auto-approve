@@ -71,6 +71,12 @@ export const Config = Schema.object({
   ]).default(null),
   classifierPrompt: Schema.string().min(1).default(CLASSIFIER_SYSTEM_PROMPT),
   timeoutMs: Schema.number().step(1).min(1).max(2_147_483_647).default(15_000),
+  // Optional provider reasoning effort for the classifier call (e.g. 'low'); null keeps the provider's default.
+  // An effort the route does not support fails the call, which hands off to manual review.
+  reasoningEffort: Schema.union([
+    Schema.string().min(1),
+    Schema.const(null),
+  ]).default(null),
   extraDangerPatterns: Schema.array(Schema.string()).default([]),
   dangerPatterns: Schema.union([
     Schema.array(Schema.string()),
@@ -448,7 +454,15 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup,
   let emittedToolCall = false
   let protocolInvalid = false
   let completed = false
-  let textSize = 0
+  // Only the answer text counts toward the size limit, once per text block.
+  // Reasoning is never parsed or kept; its length is recorded for diagnostics
+  // and its duration is bounded by the classifier timeout.
+  const outputChars = () => {
+    let total = 0
+    for (const block of blocks.values()) if (block.type === 'text') total += block.text.length
+    return total
+  }
+  timing.reasoningChars = 0
   try {
     while (true) {
       const item = await nextWithSignal(iterator, signal)
@@ -485,9 +499,12 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup,
           protocolInvalid = true
           continue
         }
+        if (expected === 'reasoning') {
+          timing.reasoningChars += chunk.text.length
+          continue
+        }
         state.text += chunk.text
-        textSize += chunk.text.length
-        if (textSize > 16_000) return { verdict: 'ask', detail: 'response-too-long' }
+        if (outputChars() > 16_000) return { verdict: 'ask', detail: 'response-too-long' }
       } else if (chunk.type === 'tool-call-delta') {
         const state = blocks.get(chunk.index)
         emittedToolCall = true
@@ -504,9 +521,8 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup,
         if (block.type === 'text') {
           if (typeof block.text !== 'string') protocolInvalid = true
           else {
-            textSize += block.text.length
-            if (textSize > 16_000) return { verdict: 'ask', detail: 'response-too-long' }
             state.text = block.text
+            if (outputChars() > 16_000) return { verdict: 'ask', detail: 'response-too-long' }
           }
         } else if (block.type === 'tool-call') {
           emittedToolCall = true
@@ -523,6 +539,7 @@ async function collectClassifierText(llm, options, signal, trackIteratorCleanup,
       }
     }
   } finally {
+    timing.outputChars = outputChars()
     if (!completed) {
       const cleanup = Promise.resolve().then(() => iterator.return?.()).catch(() => {
         // The call is already falling back to manual review; cleanup failure cannot approve it.
@@ -574,7 +591,7 @@ async function classify(ctx, req, config, evidence, selection, lifetimeSignal, t
   let timer
   const timing = { started: diagnosticNow() }
   const timed = result => timing.started === undefined ? result
-    : ({ ...result, timing: { classifierMs: Math.round((diagnosticNow() ?? NaN) - timing.started), firstChunkMs: timing.firstChunkMs } })
+    : ({ ...result, timing: { classifierMs: Math.round((diagnosticNow() ?? NaN) - timing.started), firstChunkMs: timing.firstChunkMs, reasoningChars: timing.reasoningChars, outputChars: timing.outputChars } })
   try {
     signal = AbortSignal.any(signals)
     timer = setTimeout(
@@ -585,6 +602,7 @@ async function classify(ctx, req, config, evidence, selection, lifetimeSignal, t
     const options = Object.freeze({
       provider: selection.provider,
       model: selection.model,
+      ...(typeof config.reasoningEffort === 'string' ? { reasoningEffort: config.reasoningEffort } : {}),
       messages: Object.freeze([message]),
       system: config.classifierPrompt,
       sessionId: req.agent.session.id,
@@ -625,6 +643,8 @@ function classifierDiagnostics(decision) {
   if (decision.invalidShape !== undefined) fields.push(`invalidShape=${decision.invalidShape}`)
   if (Number.isFinite(decision.timing?.classifierMs)) fields.push(`classifierMs=${decision.timing.classifierMs}`)
   if (decision.timing !== undefined) fields.push(`firstChunkMs=${Number.isFinite(decision.timing.firstChunkMs) ? decision.timing.firstChunkMs : 'none'}`)
+  if (Number.isSafeInteger(decision.timing?.reasoningChars)) fields.push(`reasoningChars=${decision.timing.reasoningChars}`)
+  if (Number.isSafeInteger(decision.timing?.outputChars)) fields.push(`outputChars=${decision.timing.outputChars}`)
   return fields.length === 0 ? '' : ` ${fields.join(' ')}`
 }
 

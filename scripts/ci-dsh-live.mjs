@@ -115,10 +115,17 @@ export function apply(ctx) {
     const headers = new Headers(typeof input === 'object' && input !== null && 'headers' in input ? input.headers : undefined)
     new Headers(init?.headers ?? {}).forEach((value, key) => headers.set(key, value))
     let model = null
-    try { model = JSON.parse(typeof init?.body === 'string' ? init.body : 'null')?.model ?? null } catch {}
+    let reasoningWire = null
+    try {
+      const body = JSON.parse(typeof init?.body === 'string' ? init.body : 'null')
+      model = body?.model ?? null
+      // Reasoning controls only (enum-like values), never message content.
+      const wire = { reasoning_effort: body?.reasoning_effort, thinking: body?.thinking, reasoning: body?.reasoning }
+      reasoningWire = Object.values(wire).some(value => value !== undefined) ? JSON.stringify(wire).slice(0, 200) : null
+    } catch {}
     const started = Date.now()
     const row = {
-      kind: 'http', host: url.hostname, path: url.pathname, method: init?.method ?? input?.method ?? 'GET', model,
+      kind: 'http', host: url.hostname, path: url.pathname, method: init?.method ?? input?.method ?? 'GET', model, reasoningWire,
       sessionHeaderSha256: headers.has('x-opencode-session') ? hash(headers.get('x-opencode-session')) : null,
       authorizationPresent: headers.has('authorization'),
     }
@@ -178,6 +185,7 @@ export function parseDecision(text) {
     decision, verdict: field('verdict'), reasonCode: field('reasonCode'), decisionSource: field('decisionSource'),
     modelRisk: field('modelRisk'), modelReason: field('modelReason'), invalidShape: field('invalidShape'),
     classifierMs: number('classifierMs'), firstChunkMs: number('firstChunkMs'),
+    reasoningChars: number('reasoningChars'), outputChars: number('outputChars'),
   }
 }
 

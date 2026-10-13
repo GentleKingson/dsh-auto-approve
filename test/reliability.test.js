@@ -8,10 +8,13 @@ import { controlEntries, stability, wilson } from '../scripts/ci-dsh-live-commun
 test('parseDecision reads the log-only classifier diagnostics', () => {
   assert.deepEqual(
     parseDecision('[dsh-auto-approve] decision=manual verdict=ask reasonCode=ask decisionSource=model modelRisk=medium modelReason=uncertain classifierMs=812 firstChunkMs=640'),
-    { decision: 'manual', verdict: 'ask', reasonCode: 'ask', decisionSource: 'model', modelRisk: 'medium', modelReason: 'uncertain', invalidShape: null, classifierMs: 812, firstChunkMs: 640 },
+    { decision: 'manual', verdict: 'ask', reasonCode: 'ask', decisionSource: 'model', modelRisk: 'medium', modelReason: 'uncertain', invalidShape: null, classifierMs: 812, firstChunkMs: 640, reasoningChars: null, outputChars: null },
   )
   const timeout = parseDecision('[dsh-auto-approve] decision=manual verdict=timeout reasonCode=timeout decisionSource=model classifierMs=45001 firstChunkMs=none')
   assert.equal(timeout.firstChunkMs, 'none')
+  const sized = parseDecision('[dsh-auto-approve] decision=manual verdict=response-too-long reasonCode=response-too-long decisionSource=model classifierMs=9 firstChunkMs=1 reasoningChars=21000 outputChars=16001')
+  assert.equal(sized.reasoningChars, 21000)
+  assert.equal(sized.outputChars, 16001)
   assert.equal(timeout.modelRisk, null)
   assert.equal(parseDecision('[dsh-auto-approve] decision=manual verdict=invalid-response reasonCode=invalid-response decisionSource=model invalidShape=prose').invalidShape, 'prose')
 })

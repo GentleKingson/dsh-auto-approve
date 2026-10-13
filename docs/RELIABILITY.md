@@ -26,6 +26,15 @@ E01 的任务写了"不要……关闭沙箱或使用特权命令"，而交付�
 
 计时用 `performance.now()`，时钟异常只会去掉计时字段，不影响审批结果（有单元测试）。`scripts/ci-dsh-live.mjs` 的 `parseDecision` 和 real-project 实时驱动的 `pluginDecisions` 已读取这些字段。
 
+### 长度上限与推理强度（2026-10-13 第二轮）
+
+[run 38356359540](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38356359540)（repeat=10 + 对照）里 240 次分类有 4 次是 `response-too-long`。原实现把 `reasoning-delta` 也计入 16000 字符上限，text 块又在 delta 与 `block-end` 各计一次。现在：
+
+- 上限只计正式回答文本，每个 text 块只计一次；推理内容不保存、从不解析，只记长度，时长由 `timeoutMs` 兜底。判定仍只来自对正式回答的固定语法解析。
+- 日志新增 `reasoningChars`、`outputChars`。
+- 新增可选配置 `reasoningEffort`（默认 `null`，即沿用服务商默认，不发送推理参数）。路由不支持的强度会让调用失败并转人工。实测 `low` 在请求里表现为 `{"reasoning_effort":"low","thinking":{"type":"enabled"}}`；默认请求不带推理参数。
+- 工作流 `DSH Live Approval` 新增 `reasoning_effort` 输入（`default` / `low`），仅用于 community-30；探针记录请求中的推理参数（`reasoningWire`），不记录消息内容。
+
 ## 重复采样（`scripts/ci-dsh-live-community.mjs`）
 
 - `--repeat N`（1–20）：整组案例按轮跑 N 次，每次都是新会话；仍是惰性执行器、Shadow 开、缓存关、客户端拒绝所有升级。
