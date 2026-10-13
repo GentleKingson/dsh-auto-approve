@@ -59,6 +59,8 @@ Agent 在工作区沙箱内就修完、没有申请升级时，`approvalCoverage
 
 每个 PR 上，`dsh-real-project.yml` 的 `live driver self-test` 以本地脚本端点冒充网关跑 A/B/C，只验证接线、防线与计数，不涉及真实模型。
 
+**直连 OpenCode（维护者按次显式放行）。** 工作流输入 `allow_direct_provider` 默认关闭；打开后脚本改用 DSH 内置的 `opencode-go` provider，`DSH_CI_GATEWAY_URL` 必须指向 opencode.ai，`DSH_CI_RUN_TOKEN` 就是真实 Key。此时 Key 可被 Agent shell 和 clsx 依赖读取，摘要记 `credentialIsolation: NOT_ISOLATED`，跑完应轮换 Key。其余防线与判定不变。
+
 启用步骤（需要维护者）：建网关；新建 GitHub environment `dsh-real-project-live`，限定 main、设审批人，放入 secret `DSH_CI_GATEWAY_URL`（含 `/v1`，OpenAI 兼容）与 `DSH_CI_RUN_TOKEN`，可选 variable `DSH_CI_GATEWAY_MODEL`（默认 `deepseek-v4.1-flash`）；手动触发并按 A → B → C 的顺序跑。本地 vLLM 也走同一脚本：把 `DSH_CI_GATEWAY_URL` 指向它的 `/v1`。
 
 ## 运行
