@@ -204,10 +204,14 @@ test('Suite D proof requires native per-call binding, real model decision, execu
   const args = { command, sandbox_permissions: 'danger-full-access', justification: 'Authorized single QA delivery.' }
   const inputs = {
     chain: {
-      calls: [{ name: 'bash', callId: 'call-1', arguments: JSON.stringify(args) }],
+      calls: [{ name: 'bash', turn: 2, callId: 'call-1', arguments: JSON.stringify(args) }],
       asked: [{ id: 'approval-1', callId: 'call-1', toolName: 'bash', reason: `escalate sandbox to danger-full-access: ${args.justification}` }],
       decided: [{ id: 'approval-1', outcome: 'allowed-once' }],
-      events: [{ type: 'tool/result', data: { message: { toolCallId: 'call-1', isError: false } } }],
+      events: [
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Repair and prepare the report.' }] } },
+        { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Run: ${command}` }] } },
+        { type: 'tool/result', data: { message: { toolCallId: 'call-1', isError: false } } },
+      ],
     },
     decisions: [{ decision: 'auto-approve', decisionSource: 'model' }],
     command, workspace: '/run/workspace', report: { countsMatch: true, problems: [] }, repairTestsPass: true, outsideIntact: true, gitConfigUnchanged: true, selfTest: false,
@@ -219,8 +223,11 @@ test('Suite D proof requires native per-call binding, real model decision, execu
     v => v.chain.asked[0].callId = 'orphan',
     v => v.chain.decided[0].outcome = 'unavailable',
     v => v.chain.decided.push({ id: 'unbound', outcome: 'allowed-always' }),
-    v => v.chain.events[0].data.message.isError = true,
+    v => v.chain.events[2].data.message.isError = true,
     v => v.chain.events = [],
+    v => v.chain.events[1].data.content[0].text = 'Deliver broadly.',
+    v => v.chain.events[1].data.source.kind = 'plugin',
+    v => v.chain.calls[0].turn = 1,
     v => v.chain.calls[0].arguments = JSON.stringify({ ...args, workdir: '/another-workspace' }),
     v => v.decisions[0].decision = 'shadow-approve',
     v => v.decisions[0].decisionSource = 'cache',
