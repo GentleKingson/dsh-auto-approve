@@ -522,6 +522,7 @@ async function main() {
     const expectRoute = side => (side === 'mock' || side === 'scripted' ? MODEL_PROVIDER : options.allowDirectProvider ? DIRECT_PROVIDER : GATEWAY_PROVIDER)
     if (!configPhase({ tree, versions, shadowMode: suite.shadowMode, profile })
       || !check('config', `agent model routes to ${expectRoute(suite.agent)}, classifier to ${expectRoute(suite.classifier)}`, routeOf('agent-default-model').provider === expectRoute(suite.agent) && routeOf('auto-approve').provider === expectRoute(suite.classifier), { agent: routeOf('agent-default-model'), classifier: { provider: routeOf('auto-approve').provider, model: routeOf('auto-approve').model } })
+      || (profile === 'acp' && !check('config', 'ACP agent and classifier both use the configured live model', routeOf('acp').provider === expectRoute(suite.agent) && routeOf('acp').model === modelName && routeOf('auto-approve').model === modelName))
       || !check('config', 'probe plugin is composed', (Array.isArray(tree) ? tree : []).some(entry => entry?.name === 'dsh-ci-live-probe' && entry.disabled !== true))) {
       stopped = true
       throw new Error('config phase failed; stopping before the headless run')
