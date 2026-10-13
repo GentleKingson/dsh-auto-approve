@@ -19,7 +19,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const PLUGIN_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -47,7 +47,7 @@ export function parseArgs(argv) {
 
 export function within(child, parent) {
   const path = relative(parent, child)
-  return path === '' || (!path.startsWith('..') && !path.startsWith(sep) && path !== '..')
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path))
 }
 
 export function canonical(path) {
@@ -135,7 +135,7 @@ export function createModelServer() {
       const caseName = /\[ci-case:([a-z0-9-]+)\]/.exec(evidence?.latestUserMessage ?? '')?.[1] ?? currentCase ?? 'unknown'
       const reply = classifierVerdicts.get(caseName) ?? '{"risk":"medium","verdict":"ask","reasonCode":"uncertain"}'
       const verdict = typeof reply === 'function' ? reply(evidence) : reply
-      log.push({ kind: 'classifier', case: caseName, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
+      log.push({ kind: 'classifier', case: caseName, classifierModel: request.model, toolName: evidence?.toolName, toolArguments: evidence?.toolArguments, justification: evidence?.justification, workspacePath: evidence?.workspacePath, verdict })
       stream(res, { text: verdict })
       return
     }
@@ -462,6 +462,32 @@ export function mockOverrides(port) {
   }
 }
 
+/** Disposable host controls call native setters; they never forge session events or approvals. */
+function writeMemoryControls(dir) {
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-ci-memory-controls', version: '0.0.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+  writeFileSync(join(dir, 'cordis.patch.yml'), '- insert:\n    - id: memory-controls\n      name: dsh-ci-memory-controls\n')
+  writeFileSync(join(dir, 'index.js'), `export const inject = ['permissionPresets', 'agentDefaultModel']
+export function apply(ctx) {
+    ctx.on('agent/pre-step', async ({ agent, step }, next) => {
+      const messages = agent.session.snapshotEvents().filter(event => event.type === 'user/message' && event.data?.source?.kind === 'user')
+      const text = messages.at(-1)?.data?.content?.map(part => part.text ?? '').join('') ?? ''
+      if (text.startsWith('[ci-case:memory-preset]')) {
+        if (step === 3) ctx.permissionPresets.set(agent.session, 'workspace-write')
+        if (step === 4) ctx.permissionPresets.set(agent.session, 'sandboxed-auto')
+      }
+      if (text.startsWith('[ci-case:memory-preset-roundtrip]') && step === 3) {
+        ctx.permissionPresets.set(agent.session, 'workspace-write')
+        ctx.permissionPresets.set(agent.session, 'sandboxed-auto')
+      }
+      if (text.startsWith('[ci-case:memory-model]') && (step === 3 || step === 4)) {
+        await ctx.agentDefaultModel.saveSelection({ provider: '${MODEL_PROVIDER}', model: step === 3 ? '${MODEL_ID}-alternate' : '${MODEL_ID}' })
+      }
+      return next()
+    })
+  }`)
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   evidenceDir = options.evidence
@@ -480,6 +506,9 @@ async function main() {
 
   // Install this checkout through the host's own plugin manager.
   installLinkedPlugin(options, root, baseEnv, PLUGIN_DIR, 'plugin-install.log')
+  const memoryControls = join(root, 'memory-controls')
+  writeMemoryControls(memoryControls)
+  installLinkedPlugin(options, root, baseEnv, memoryControls, 'memory-controls-install.log')
 
   const model = createModelServer()
   const port = await model.listen()
@@ -502,7 +531,10 @@ async function main() {
     writeFileSync(patchFile, autoPatch())
     writeEvidence('cordis.patch.auto.yml', autoPatch())
     failed = !(await autoPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml })) || failed
-    writeFileSync(patchFile, patch(true, { 'auto-approve': { shadowMode: false, sessionMemory: true } }))
+    writeFileSync(patchFile, patch(true, {
+      'auto-approve': { shadowMode: false, sessionMemory: true, provider: null, model: null },
+      'llm-pi-ai': { providers: { [MODEL_PROVIDER]: { models: [MODEL_ID, `${MODEL_ID}-alternate`].map(id => ({ id, contextWindow: 131072, maxTokens: 4096, reasoningEfforts: false })) } } },
+    }))
     failed = !(await memoryPhase({ options, model, baseEnv, dshHome, workspace, outside })) || failed
     writeFileSync(patchFile, patch(false))
     writeEvidence('cordis.patch.disabled.yml', patch(false))
@@ -867,6 +899,21 @@ async function memoryPhase({ options, model, baseEnv, dshHome, workspace, outsid
     model.script('memory-workspace', [step(args)], low)
     const third = await runCase(acp, { workspace: otherWorkspace, caseName: 'memory-workspace', prompt: 'Create these disposable markers.', onPermission: reject })
     check(phase, 'new working directory reaches the classifier with the new native workspace', classifierCalls(model, 'memory-workspace').length === 1 && classifierCalls(model, 'memory-workspace')[0].workspacePath === otherWorkspace && approvalChain(dshHome, third.sessionId).decided[0]?.outcome === 'allowed-once')
+
+    // Native host setters change the preset and deployment classifier model mid-turn.
+    // The controller is trusted test code, not evidence of browser UI behavior.
+    model.script('memory-preset', [step(args), step(args), step(args), step(args), step(args)], low)
+    const policy = await runCase(acp, { workspace, caseName: 'memory-preset', prompt: 'Check native preset transitions.', onPermission: reject })
+    const policyChain = approvalChain(dshHome, policy.sessionId)
+    check(phase, 'native preset exit and return discard the old grant', classifierCalls(model, 'memory-preset').length === 2 && policy.permissions.length === 1 && JSON.stringify(policyChain.decided.map(item => item.outcome)) === JSON.stringify(['allowed-once', 'allowed-once', 'rejected', 'allowed-once', 'allowed-once']), policyChain.decided)
+    check(phase, 'preset transition evidence comes from the native durable setter', JSON.stringify(policyChain.events.filter(item => item.type === 'permission/preset').map(item => eventData(item).preset)) === JSON.stringify(['sandboxed-auto', 'workspace-write', 'sandboxed-auto']))
+    model.script('memory-preset-roundtrip', [step(args), step(args), step(args), step(args)], low)
+    const roundtrip = await runCase(acp, { workspace, caseName: 'memory-preset-roundtrip', prompt: 'Check a native permission roundtrip without an intermediate approval.', onPermission: reject })
+    check(phase, 'native permission roundtrip without an intervening request discards the grant', classifierCalls(model, 'memory-preset-roundtrip').length === 2 && roundtrip.permissions.length === 0)
+    model.script('memory-model', [step(args), step(args), step(args), step(args), step(args)], low)
+    const switching = await runCase(acp, { workspace, caseName: 'memory-model', prompt: 'Check deployment classifier model transitions.', onPermission: reject })
+    const selected = classifierCalls(model, 'memory-model').map(item => item.classifierModel)
+    check(phase, 'native deployment model switch and return reclassify under each route', JSON.stringify(selected) === JSON.stringify([MODEL_ID, `${MODEL_ID}-alternate`, MODEL_ID]) && switching.permissions.length === 0, selected)
 
     // Genuine new user messages in the same session revoke and later reauthorize.
     const current = await acp.request('session/new', { cwd: workspace, mcpServers: [] })

@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { within } from '../scripts/ci-dsh-integration.mjs'
 import { Config, createApprovalHandler } from '../index.js'
 import { inspectCommand, powershellCommandPlan, powershellCommandWords, securityTarget, sensitivePath, unverifiedWindowsPath } from '../danger-patterns.js'
 
@@ -251,5 +252,14 @@ assert sentinel.read_text(encoding='utf-8') == 'keep'
     execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-S', '-B', '-c', script], { cwd: dir, timeout: 15000 })
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+
+test('host root checks reject temp children and treat different Windows drives as separate roots', () => {
+  assert.equal(within(join(tmpdir(), 'child'), tmpdir()), true)
+  if (process.platform === 'win32') {
+    assert.equal(within('D:\\a\\_temp\\host', 'C:\\Users\\runner\\Temp'), false)
+    assert.equal(within('C:\\Users\\runner\\Temp\\host', 'C:\\Users\\runner\\Temp'), true)
   }
 })

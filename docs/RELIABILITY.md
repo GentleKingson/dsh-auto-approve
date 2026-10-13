@@ -4,9 +4,11 @@
 
 最新 main 起始 `c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`。重新读取 GitHub 原始 job 日志确认：默认推理 run [38361465772](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38361465772) 执行 360 案例、翻转 13、would-auto 120、必须人工的 would-auto 0；low run [38361497099](https://github.com/GentleKingson/dsh-auto-approve/actions/runs/38361497099) 执行 360 案例、翻转 15、would-auto 104、必须人工的 would-auto 0。两次各 4258/4258 检查通过。汇总差异不足以证明改变推理强度有收益，保留 `reasoningEffort:null`，不增加投票或放宽阈值。
 
-#14 的正式回答长度修复和 fail-closed 故障回归继续保留；本轮不改运行时规则。与任务无关的 touch 仍只证明分类器可能把低副作用操作视为 routine；E01 明确禁止关闭沙箱、QA 旧报告禁止覆盖，两轮真实 Shadow 中均没有观察到必须人工案例误批。没有足够证据支持扩充全局禁止规则。
+#14 的正式回答长度修复和 fail-closed 故障回归继续保留；本轮保留分类规则，补齐权限切换后的缓存失效。与任务无关的 touch 仍只证明分类器可能把低副作用操作视为 routine；E01 明确禁止关闭沙箱、QA 旧报告禁止覆盖，两轮真实 Shadow 中均没有观察到必须人工案例误批。没有足够证据支持扩充全局禁止规则。
 
-真实 DSH + Mock 的 ACP 驱动新增缓存验收：同一用户上下文内精确复用、参数变化、workdir 变化、另一 workspace/会话、真实用户撤销及精确重新授权、人工一次性许可、中风险许可不缓存。原有单元回归继续覆盖政策、模型、TTL、取消和卸载期间的失效。实际浏览器与 Windows 宿主结果分别记录，不能由 Linux Headless 结果代替。
+发现并复现：离开 Auto 后切回，缓存可恢复旧 key。最小修复在已有 scope 中加入原生 `permission/preset`、`sandbox/mode`、`approval/policy` 历史摘要，并在观察到离开 Auto 时清空该会话记忆。回切、未在中间申请审批的回切及分类期间回切均需重新分类或转人工；同一上下文的合法精确复用保留。策略仍为 `approval-v6`。
+
+真实 DSH + Mock 的 ACP 驱动新增缓存验收：同一用户上下文内精确复用、参数变化、workdir 变化、另一 workspace/会话、真实用户撤销及精确重新授权、人工一次性许可、中风险许可不缓存。可丢弃宿主控制插件只调用原生权限/模型 setter，验证同一宿主内的权限预设和分类模型切换及回切，不伪造会话事件或审批。原有单元回归继续覆盖 TTL、取消和卸载期间的失效。实际浏览器与 Windows 宿主结果分别记录，不能由 Linux Headless 结果代替。
 
 2026-10-13。唯一宿主 DSH `0.2.0-rc.2`，真实分类模型 `opencode-go/deepseek-v4.1-flash`。本轮不改审批结果：风险阈值、危险规则、分类提示词、标签和 `POLICY_VERSION`（仍为 `approval-v6`）都不变。
 

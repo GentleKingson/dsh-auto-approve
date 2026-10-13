@@ -2,7 +2,9 @@
 
 ## 2026-10-13：Auto 最终闭环的验收边界
 
-起始 main 为 `c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`，DSH 固定 `0.2.0-rc.2`，策略仍为 `approval-v6`。Suite D 的具体约束见 [REAL_PROJECT_CI.md](./REAL_PROJECT_CI.md)，重复 Shadow 复核见 [RELIABILITY.md](./RELIABILITY.md)。本轮自主授权包含在必要 CI 通过后正常 Squash Merge；不修改仓库保护、Secrets 或 Environment 审批，不发布 npm/Release。
+起始 main 为 `c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`，DSH 固定 `0.2.0-rc.2`，策略仍为 `approval-v6`。Suite D 的具体约束见 [REAL_PROJECT_CI.md](./REAL_PROJECT_CI.md)，重复 Shadow 复核见 [RELIABILITY.md](./RELIABILITY.md)。本轮最小运行时修复为权限变更历史绑定缓存上下文，防止离开 Auto 再切回时复用旧许可；原生宿主和离线回归分别验证。
+
+本轮自主授权包含在必要 CI 通过后正常 Squash Merge；不修改仓库保护、Secrets 或 Environment 审批，不发布 npm/Release。
 
 验收独立报告：协议兼容、真实模型判断、实际批准及执行、宿主隔离、生产安全。Suite D 自检通过只证明驱动接线；仅真实 Agent 和真实分类器在同次 Live 运行取得正确的 `allowed-once`、真实报告及独立断言，才记 `SUITE_D_PROVEN`。本轮允许直连 Key，直连一律记 `credentialIsolation: NOT_ISOLATED`。
 
