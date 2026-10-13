@@ -2,7 +2,7 @@
 
 ## 2026-10-13：G01–G11 最终闭环
 
-本节是当前终态；下文保留的 P1/P2/P3、早期版本与 PR 状态均为历史记录。起始 main：`c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`；首轮实现：`1969e568fd75d834aac6b0554bf485af3bcda52d`（[PR #15](https://github.com/GentleKingson/dsh-auto-approve/pull/15) Squash）；最终 Live 基线：`78a711208ca405f5e4d7db66bb89866a4d88ef24`（[PR #16](https://github.com/GentleKingson/dsh-auto-approve/pull/16) Squash）。最终 main 为本验收 PR 的 Squash 提交，合并后在最终交付中列出完整 SHA；文档提交不改变被测运行时代码。
+本节是当前终态；下文保留的 P1/P2/P3、早期版本与 PR 状态均为历史记录。起始 main：`c1fe968fd3a7303c7eb4c63aa1faeeb6b28ac1d4`；首轮实现：`1969e568fd75d834aac6b0554bf485af3bcda52d`（[PR #15](https://github.com/GentleKingson/dsh-auto-approve/pull/15) Squash）；最终 Live 基线：`78a711208ca405f5e4d7db66bb89866a4d88ef24`（[PR #16](https://github.com/GentleKingson/dsh-auto-approve/pull/16) Squash）。最终 main 为[本验收 PR #17](https://github.com/GentleKingson/dsh-auto-approve/pull/17) 的 Squash 提交，合并后在最终交付中列出完整 SHA；文档提交不改变被测运行时代码。
 
 | 工作包 | 终态 | 处置及限制 |
 | --- | --- | --- |
@@ -42,7 +42,7 @@
 
 第二轮是为确认首轮的精确授权失败性质而追加；完整原生用户文本通过核验后仍得到有效 ask，因此止于明确 NO-GO，不使用第三次运行来追求 approve。两轮输入不同，不把转人工变化或耗时差异解释为效率提升；没有生产基线，不报告减少的人类审批次数。
 
-本轮只有上述两次真实 D dispatch，没有重复大规模采样。直连 Key 与 Agent shell/第三方代码共享 Runner：`credentialIsolation: NOT_ISOLATED`。受控功能验证不是凭据隔离证明；没有服务商费用硬上限，宿主探针的 40 请求上限不覆盖 shell 网络。未读取或修改 Secrets，没有额外生产凭据或生产资产。Key 未自动轮换：尚未确认不会影响其他服务，也未获得服务商管理权限；后续需由维护者确认轮换影响。
+本轮只有上述两次真实 D dispatch，没有重复大规模采样。直连 Key 与 Agent shell/第三方代码共享 Runner：`credentialIsolation: NOT_ISOLATED`。受控功能验证不是凭据隔离证明；没有服务商费用硬上限，宿主探针的 40 请求上限不覆盖 shell 网络。仅在获授权的 Live 步骤使用既有 Secret；未导出其值或修改 GitHub Secrets，没有额外生产凭据或生产资产。Key 未自动轮换：尚未确认不会影响其他服务，也未获得服务商管理权限；后续需由维护者确认轮换影响。
 
 ### 源码、上游资料与未验证内容
 
@@ -61,7 +61,7 @@
 
 生产无人值守安全：NO-GO。宿主控制面修复、实际部署隔离、真实浏览器人工兜底和服务商 Key 隔离仍未闭环。有限模型测试不证明低生产误批率或稳定批准；不能用反复投票来消除不确定性。
 
-运行回滚先设置 `shadowMode:true`、`sessionMemory:false`，或切回 workspace-write；需要恢复原生审批时禁用插件并重启（ACP 已验证）。驱动回滚可通过新 PR revert #16 的 Squash 提交 `78a711208ca405f5e4d7db66bb89866a4d88ef24`。工程回滚通过新 PR revert #15 的 Squash 提交 `1969e568fd75d834aac6b0554bf485af3bcda52d`，走原安全门禁；不恢复已知的错误缓存许可，不回退到更早弱规则，也不直接推 main。
+运行回滚先设置 `shadowMode:true`、`sessionMemory:false`，或切回 workspace-write；需要恢复原生审批时禁用插件并重启（ACP 已验证）。驱动回滚可通过新 PR revert #16 的 Squash 提交 `78a711208ca405f5e4d7db66bb89866a4d88ef24`。若撤销 #15 的测试/驱动改动，应保留 index.js 缓存修复；必须整体回退时先禁用 Auto 和缓存，并维持禁用直到修复重新应用。回退均通过新 PR 走原安全门禁，不恢复已知的错误缓存许可、不回退到更早弱规则、不直接推 main。
 
 ## 2026-10-13：Auto 最终闭环的验收边界
 
