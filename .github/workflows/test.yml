@@ -22,7 +22,13 @@ jobs:
 
   windows-approval:
     name: Windows approval adapters (Node ${{ matrix.node-version }})
-    runs-on: windows-latest
+    # Pinned image family (Windows Server 2025); the exact image version is in the job log.
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
     strategy:
       fail-fast: false
       matrix:
@@ -129,12 +135,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Native Windows host on the one supported DSH release: version gate, composed
+  # profile, the real ACL restricted-token sandbox (inside write, outside denial),
+  # Shadow, actual allowed-once side effects, local danger rules, cancellation and
+  # the disabled plugin, each phase in its own ACP process. Scripted model, no
+  # secret, no host ACL change. Only redacted summaries are uploaded; raw ACP
+  # transcripts, session logs and host stderr stay in RUNNER_TEMP. Scope and
+  # limits (Desktop/console-less hosts are not covered): docs/ACCEPTANCE.md.
   windows-host:
     name: Windows DSH host (0.2.0-rc.2, mock)
-    runs-on: windows-latest
-    timeout-minutes: 15
+    runs-on: windows-2025
+    timeout-minutes: 25
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DSH_VERSION: 0.2.0-rc.2
+      PNPM_VERSION: 10.28.0
     steps:
       - uses: actions/checkout@v4
         with:
@@ -144,10 +163,13 @@ jobs:
           node-version: 24.x
           cache: npm
       - run: npm ci
-      - run: |
-          npm install --prefix "$env:RUNNER_TEMP/dsh" --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
-          npm install --global --no-audit --no-fund pnpm@10.28.0
-      - name: Run minimal native Windows host check
+      - name: Install pinned DSH and pnpm
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/dsh" --no-audit --no-fund "@deepseek-ai/dsh@$env:DSH_VERSION"
+          npm install --global --no-audit --no-fund "pnpm@$env:PNPM_VERSION"
+      - name: Run native Windows host phases
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: >-
           node scripts/ci-dsh-windows.mjs
           --dsh "$env:RUNNER_TEMP/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
@@ -156,9 +178,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-windows-host
+          name: dsh-windows-host-evidence-${{ env.DSH_VERSION }}
           path: ${{ runner.temp }}/dsh-windows-evidence
-          retention-days: 7
+          retention-days: 30
           if-no-files-found: error
 
   # Safety regression gate for the 53 public community cases: the real

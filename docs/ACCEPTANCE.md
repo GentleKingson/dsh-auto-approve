@@ -1,5 +1,43 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-15：Windows 原生 DSH 宿主测试补齐（T01–T06）
+
+起始 main：`9fe7fcd8c0008fd3bd36695410b81581ea2e2e9c`。宿主 DSH `0.2.0-rc.2`（精确 Peer 不变）、Node 24、PowerShell 7.6.6、Runner `windows-2025`（实测镜像 win25-vs2026 20260925.250.1，Windows Server 2025 10.0.26100）。运行时代码（index.js、danger-patterns.js、cordis.patch.yml）、策略 `approval-v6` 与插件版本 0.7.1 未修改；未改宿主 ACL、令牌或全局设置；模型响应仍为本地脚本化端点，不使用任何 Secret。
+
+`scripts/ci-dsh-windows.mjs` 每个阶段使用独立 ACP 进程，复用 `ci-dsh-integration.mjs` 的驱动与断言（新导出 `versionGatePhase`、`checkEffectiveConfig`，Linux 检查文本不变）。PR #19 的 Windows Runner：**109/109 PASS**，无 SANDBOX_UNAVAILABLE/0xC0000142/运行器失败诊断；Windows 适配测试 Node 22/24 各 33/33（0 跳过）。
+
+| 编号 | 终态 | 真实宿主事实 |
+| --- | --- | --- |
+| T01 安装与配置 | PASS | 精确 Peer 安装、错误 Peer 安装拒绝与启动跳过（Windows 用 junction 代替 POSIX 目录符号链接）；插件只组合一次，`sandboxed-auto`=workspace-write+ask 为默认，审批策略 ask；ACP 协议 v1。 |
+| T02 ACL 沙箱 | PASS | 无升级 pwsh 在工作区写入成功；同一回合写 `<root>\outside` 被拒绝并返回原生 `[sandbox: file access denied under workspace-write mode]`，无审批。负例目录经断言不在工作区及 `TEMP/TMP/os.tmpdir()` 内；同一目录在升级后可写（T04），证明拒绝来自受限令牌而非目录本身。 |
+| T03 Shadow | PASS | pwsh `git init` 外部目录：分类器恰好 1 次且参数绑定，判 low/approve 后仍发往 ACP 客户端；拒绝后 `approval/decided=rejected`，callId 唯一绑定，无仓库产生。 |
+| T04 自动批准 | PASS | Shadow 关：同类请求分类器 1 次、客户端 0 次请求、`allowed-once`、`tool/result` 成功、外部 `.git/HEAD` 实际存在。独立写入副作用：`write` 最低为 medium，故只在现有精确 `Run:` 授权路径下验证，Unicode 带空格文件名和 CRLF 内容逐字节一致；未放宽任何规则。 |
+| T05 危险与人工拒绝 | PASS | `git push origin main --force`、大小写混合的 `.DSH` 受保护路径、未知 cmdlet（Remove-Item）、管道重定向：分类器 0 次即转人工，拒绝后 `tool/result` 为拒绝错误，目标文件不变；write/edit 原生拒绝后无文件、CRLF 内容不变。危险命令只作为被拦截输入。 |
+| T06 取消与禁用 | PASS | 待审批取消：`stopReason=cancelled`、`approval/decided=cancelled`，进程退出后仍无副作用；禁用插件重启后分类器 0 次，审批回到原生客户端。 |
+
+Linux → Windows 覆盖对照：
+
+| Linux 真实宿主项 | 之前 Windows | 现在 Windows |
+| --- | --- | --- |
+| version-gate、config | 仅版本号 | 真实宿主 |
+| sandbox-probe | 仅工作区内 `git --version` | 真实宿主（内写/外拒/无审批/非静默降级） |
+| bash-shadow、write/edit 拒绝 | 仅 write 拒绝 | 真实宿主（pwsh Shadow、write、edit） |
+| auto-allowed-once | `git --version`，无副作用 | 真实宿主（外部 `git init` + 精确授权写入） |
+| auto-high-risk | 缺失 | 真实宿主（4 类本地交接） |
+| cancel-pending、plugin-disabled | 缺失 | 真实宿主 |
+| session-memory（setter、模型切换、撤销） | 单元覆盖 | ALREADY_COVERED：缓存逻辑与平台无关，Linux 真实宿主 + `index.test.js` pwsh 缓存/撤销用例；未重复移植 |
+| web-smoke、community-host-boundary | — | NOT_APPLICABLE：Web 客户端平台无关；惰性执行器边界针对 bash |
+
+P2 回归（`test/windows-approval.test.js`）：PowerShell 变量展开、子表达式、脚本块、重定向、管道链、CRLF 拒绝；单引号 `$()`、Unicode 空格路径、Tab 的原生 AST 对照；敏感/受保护路径大小写、`\\?\UNC`、命名管道、驱动器相对路径、ADS；模型异常、无效回复、超时转人工；Windows 原生 NTFS 事实（大小写折叠、ADS 真实存在、junction 无需特权）。AST 只用于语法核对。140 条固定语料 unsafeAuto=0、safeToHuman=0、modelCalls=73 不变；社区离线门禁 PASS；Linux ACP 95/95。
+
+证据：作业 Artifact `dsh-windows-host-evidence-0.2.0-rc.2` 只含脱敏的 assertions（分阶段计数、失败原因、诊断分类）、versions、environment、effective-config-summary；根目录、用户目录、临时目录、用户名与主机名替换为占位符。原始 ACP 记录、Session 日志、宿主 stderr、配置转储留在 RUNNER_TEMP 随 Runner 丢弃。
+
+未解决与外部阻塞：
+
+- EXTERNAL_BLOCKED：DSH Desktop/Electron 与无控制台宿主的 `0xC0000142`（[#9038](https://github.com/deepseek-ai/deepseek-harness/discussions/9038)、[#9682](https://github.com/deepseek-ai/deepseek-harness/discussions/9682)，均为 0.2.0-rc.2，上游未修复）。Runner 上是带控制台的 node.exe 宿主，结果不代表 Desktop。
+- 已知限制（非回归，未修改）：路径分类是词法的。原生测试证明 junction 无需特权即可创建且指向受保护目录时词法规则检测不到；此时只有分类器与原生审批作为边界。如需关闭，需要宿主提供真实落点证据，属于架构改动，不在本轮范围。
+- ACL 边界：上游文档声明 Everyone 现有授权是部分边界；本轮只证明 Runner 上 `RUNNER_TEMP` 下普通目录被拒绝，不代表所有目录。
+
 ## 2026-10-13：最小 Web 客户端与部署验收（W01–W04）
 
 起始 main：`d588b0c02a80106329de15d8c69569a05f598f0e`；宿主 DSH `0.2.0-rc.2`、pnpm `10.28.0`、Playwright `1.56.1` Chromium、Node 24、Ubuntu 24.04；策略 `approval-v6` 与 G07 缓存权限回切修复不变，运行时代码未修改。新增 `test.yml` 的 `web-smoke` 作业（`scripts/ci-dsh-web-smoke.mjs`），不需要任何 Secret，模型响应来自 `ci-dsh-integration.mjs` 的本地脚本化端点。
@@ -31,7 +69,7 @@
 | G06 无效响应/超时 | ALREADY_RESOLVED | #14 正式回答长度修复保留；故障注入确认异常、超时、无效协议和格式全部 fail-closed。本轮未发现需追加修改的解析实现缺陷。 |
 | G07 Session Memory | IMPLEMENTED | 修复权限离开/回切恢复旧缓存的共同根因；原生权限历史入 scope，观察到离开 Auto 时清理。真实 DSH+Mock 验证精确复用、参数/workdir/workspace/session、撤销/重新授权、权限和模型切换，以及中风险/下游许可不缓存。 |
 | G08 客户端兜底 | BLOCKED（浏览器验收） | 真实 ACP 的拒绝、取消、重新授权、禁用后原生恢复 PASS；原生权限切换由可丢弃测试控制插件调用 setter 验证。实际 Web/Desktop/TUI 浏览器和用户界面切档 NOT_VERIFIED，未以 Headless 替代。 |
-| G09 Windows 宿主 | IMPLEMENTED | Windows Runner 的真实 pwsh 受限执行、原生 allowed-once、人工拒绝外部 write 和退出共 11 项 PASS；未修改全局 ACL。范围不包含所有 Windows ACL、junction 或控制面隔离性质。 |
+| G09 Windows 宿主 | IMPLEMENTED | 2026-10-13 时为 11 项 PASS；2026-10-15 扩展为分阶段 109 项（见上方 T01–T06）。未修改全局 ACL。范围不包含所有 Windows ACL、junction 落点、Desktop 或控制面隔离性质。 |
 | G10 真实收益 | IMPLEMENTED（收益未证明） | 两轮合计 2 原生请求、0 实际自动批准、2 人工路径转交、0 模型失败；26+27=53 个宿主 HTTP 请求。没有有效生产人工基线，不宣称人工节省，Shadow 不计节省。 |
 | G11 文档 | IMPLEMENTED | README、ACCEPTANCE、RELIABILITY、REAL_PROJECT_CI 对齐当前结果；功能、宿主安全、凭据隔离及生产安全独立报告。 |
 

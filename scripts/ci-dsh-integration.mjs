@@ -607,7 +607,7 @@ const INCOMPATIBLE_DSH = '0.0.0-ci-incompatible'
  * plugin whose @deepseek-ai/dsh peer does not match the running host.
  * Uses a separate DSH_HOME so the main profile is untouched.
  */
-function versionGatePhase({ options, root, versions }) {
+export function versionGatePhase({ options, root, versions }) {
   const phase = 'version-gate'
   const manifest = JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8'))
   const expected = process.env.DSH_VERSION
@@ -622,7 +622,8 @@ function versionGatePhase({ options, root, versions }) {
   try {
     mkdirSync(copy, { recursive: true })
     for (const file of manifest.files.filter(file => !file.startsWith('test/') && !['docs', 'scripts', 'README.md', 'README_EN.md'].includes(file))) cpSync(join(PLUGIN_DIR, file), join(copy, file), { recursive: true })
-    symlinkSync(join(PLUGIN_DIR, 'node_modules'), join(copy, 'node_modules'), 'dir')
+    // A junction needs no symlink privilege on Windows and resolves like the POSIX directory link.
+    symlinkSync(join(PLUGIN_DIR, 'node_modules'), join(copy, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
     const writePeer = range => writeFileSync(join(copy, 'package.json'), `${JSON.stringify({ ...manifest, peerDependencies: { ...manifest.peerDependencies, '@deepseek-ai/dsh': range } }, null, 2)}\n`)
     const dsh = (args, log) => {
       const result = spawnSync(process.execPath, [options.dsh, ...args], { cwd: root, env, encoding: 'utf8', timeout: 300_000 })
@@ -682,9 +683,8 @@ export function lastToolResults(model, caseName) {
 
 export const reject = () => ({ outcome: { outcome: 'selected', optionId: 'reject-once' } })
 
-async function enabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {
-  const phase = 'config'
-  const tree = dumpConfig(options, baseEnv, workspace, parseYaml, 'effective-config.yml')
+/** The composed default profile: plugin once, sandboxed-auto (workspace-write + ask) as default, shadow on, no memory. */
+export function checkEffectiveConfig(phase, tree) {
   const plugins = (Array.isArray(tree) ? tree : []).filter(entry => entry?.name === 'dsh-auto-approve')
   check(phase, 'dsh-auto-approve is composed exactly once (id auto-approve)', plugins.length === 1 && plugins[0].id === 'auto-approve' && plugins[0].disabled !== true, plugins)
   const pluginConfig = plugins[0]?.config ?? {}
@@ -693,7 +693,13 @@ async function enabledPhase({ options, model, baseEnv, dshHome, workspace, outsi
   check(phase, 'effective sandboxed-auto preset is workspace-write + ask and is the default preset', permission.defaultPreset === 'sandboxed-auto' && permission.presets?.['sandboxed-auto']?.sandbox === 'workspace-write' && permission.presets?.['sandboxed-auto']?.approval === 'ask', permission)
   check(phase, 'effective approval policy is ask (never would reject before any plugin)', configEntry(tree, 'approval')[0]?.config?.policy === 'ask', configEntry(tree, 'approval'))
   check(phase, 'effective sandbox policy is workspace-write', configEntry(tree, 'sandbox-policy')[0]?.config?.mode === 'workspace-write', configEntry(tree, 'sandbox-policy'))
-  writeEvidence('effective-config-summary.json', { plugin: plugins, permission, approval: configEntry(tree, 'approval'), sandboxPolicy: configEntry(tree, 'sandbox-policy'), acp: configEntry(tree, 'acp') })
+  return { plugin: plugins, permission, approval: configEntry(tree, 'approval'), sandboxPolicy: configEntry(tree, 'sandbox-policy'), acp: configEntry(tree, 'acp') }
+}
+
+async function enabledPhase({ options, model, baseEnv, dshHome, workspace, outside, parseYaml }) {
+  const phase = 'config'
+  const tree = dumpConfig(options, baseEnv, workspace, parseYaml, 'effective-config.yml')
+  writeEvidence('effective-config-summary.json', checkEffectiveConfig(phase, tree))
 
   const acp = startAcp({ dsh: options.dsh, cwd: workspace, env: baseEnv, stderrPath: join(evidenceDir, 'dsh-enabled.stderr.log'), label: 'enabled' })
   let ok = true
