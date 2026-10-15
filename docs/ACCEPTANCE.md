@@ -1,5 +1,23 @@
 # 安全审批改造验收记录与灰度门槛
 
+## 2026-10-15：链接重定向的防御性收紧（审批时证据，HOST_FIX_REQUIRED）
+
+起始 main：`cc57f309a487554a760aa83d589a6714a2a60c4f`。本轮按决定不做真实宿主绕过实验，只做防御性修复与非攻击性分类/文件系统测试。
+
+审计结论：插件运行在 DSH 宿主进程内，与本地沙箱/执行器共用文件系统；`realpathSync.native` 在 Linux 解析 symlink，在 Windows 经 `GetFinalPathNameByHandle` 解析 symlink、junction 及其他重定向型 reparse point。因此审批时可以可靠得到“已存在前缀”的真实落点。不能可靠得到的：审批后、执行前被替换的路径（TOCTOU）；远程执行器的文件系统；执行时才创建的链接。
+
+| 项 | 处置 |
+| --- | --- |
+| 检查范围 | 只在插件原本就做路径判断的位置（write/edit 的 `file_path`；bash 输出目标、读取类命令参数、git `-C`/clone；pwsh 全部参数）额外检查真实落点。没有新增“工作区可写即转人工”之类的规则，从不做路径判断的命令（如 `touch`）也不开始做。 |
+| 新增交接 | 真实落点命中敏感或受保护规则而字面路径未命中：`path-redirected`；悬空链接、循环或无权解析：`path-unverified`。均在模型前转人工。 |
+| 缩窄竞态 | 自动批准前重新解析；模型运行期间出现的新重定向转人工（`context-changed`）。批准之后到执行之间的替换仍无法由插件阻止。 |
+| 批准率 | 普通路径与非受保护链接结果不变：140 条固定语料 unsafeAuto=0、safeToHuman=0、modelCalls=73；社区离线门禁 PASS（modelCalls=19 不变）；Linux ACP 95/95。 |
+| 不变项 | `approval-v6`、插件 0.7.1、默认安全行为、分类器协议不变；无新增依赖。 |
+
+测试：`test/path-redirection.test.js` 只在一次性临时目录中用模拟 `.dsh` 建立链接（Windows 用 junction，Linux 用目录 symlink），不执行任何命令；覆盖真实落点解析、悬空链接、敏感/受保护重定向转人工、普通路径与普通链接保持原结果、模型运行期间的链接替换。该文件同时在 Linux `npm test` 与 Windows 适配作业（Node 22/24）运行。
+
+结论：HOST_FIX_REQUIRED。插件侧检查只降低已存在链接的风险，不构成执行时保证；完整防护需要 DSH 宿主在实际执行时以不跟随链接或核验最终落点的方式强制约束。
+
 ## 2026-10-15：Windows 原生 DSH 宿主测试补齐（T01–T06）
 
 起始 main：`9fe7fcd8c0008fd3bd36695410b81581ea2e2e9c`。宿主 DSH `0.2.0-rc.2`（精确 Peer 不变）、Node 24、PowerShell 7.6.6、Runner `windows-2025`（实测镜像 win25-vs2026 20260925.250.1，Windows Server 2025 10.0.26100）。运行时代码（index.js、danger-patterns.js、cordis.patch.yml）、策略 `approval-v6` 与插件版本 0.7.1 未修改；未改宿主 ACL、令牌或全局设置；模型响应仍为本地脚本化端点，不使用任何 Secret。

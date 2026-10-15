@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { isAbsolute, resolve } from 'node:path'
+import { lstatSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
 import { acquireCompileEvidence, COMPILE_EVIDENCE_SERVICE, compileEvidenceRequest } from './compile-evidence.js'
 import { DEFAULT_DANGER_PATTERNS, POLICY_VERSION, commandWords, containsSecret, inspectCommand, isShellTool, powershellCommandPlan, securityTarget, sensitivePath, unverifiedWindowsPath } from './danger-patterns.js'
@@ -46,6 +47,7 @@ const HANDOFF_EXPLANATIONS = Object.freeze({
   'unsupported-syntax': '不支持该 Shell 语法 / Unsupported shell syntax',
   'unsupported-command': '尚未支持该 PowerShell 命令语义 / Unsupported PowerShell command',
   'path-unverified': '路径范围无法核验 / Unverified path scope',
+  'path-redirected': '路径经链接指向敏感或受保护位置 / Path links to a sensitive or protected target',
   'execution-environment-unverified': '执行程序来源无法核验 / Unverified executable',
   'python-compile-environment-unverified': '已识别 Python 编译；解释器和缓存落点尚未核验 / Python compile environment unverified',
   'compile-evidence-unavailable': '宿主未提供可信编译证据接口 / Host compile evidence unavailable',
@@ -275,6 +277,65 @@ function verifiedToolCall(events, req) {
   if (Object.keys(args).some(key => !keys.includes(key))) return undefined
   if (!isShellTool(call.name) && (typeof args.file_path !== 'string' || args.file_path.trim().length === 0 || args.file_path.includes('\0'))) return undefined
   return Object.freeze({ call, args, raw: call.arguments, command: args.command ?? null })
+}
+
+/** Raised when a path's real target cannot be established; the request goes to a human. */
+class PathUnverified extends Error {}
+
+/**
+ * The real location a path resolves to on this host: links, junctions and
+ * other redirecting reparse points resolved for the existing prefix, the
+ * missing tail appended. A dangling link or a resolution error (loop, access)
+ * is unverified. This is approval-time evidence on the plugin host's own
+ * filesystem: it cannot see a later swap before execution (TOCTOU) or a
+ * remote executor's filesystem; only the host can enforce the final target.
+ */
+// A missing component, or text that cannot name an existing file (too long,
+// invalid characters), is a tail to append: it cannot itself be a link.
+const MISSING = ['ENOENT', 'ENOTDIR', 'ENAMETOOLONG', 'EINVAL']
+
+export function canonicalTarget(path) {
+  const rest = []
+  for (let probe = path; ;) {
+    try {
+      return join(realpathSync.native(probe), ...rest.reverse())
+    } catch (error) {
+      if (!MISSING.includes(error?.code)) throw new PathUnverified(error?.code)
+    }
+    let link = false
+    try { link = lstatSync(probe).isSymbolicLink() } catch (error) {
+      if (!MISSING.includes(error?.code)) throw new PathUnverified(error?.code)
+    }
+    if (link) throw new PathUnverified('dangling-link')
+    const parent = dirname(probe)
+    if (parent === probe) return path
+    rest.push(basename(probe))
+    probe = parent
+  }
+}
+
+function pathAction(verified, context, realTarget) {
+  if (isShellTool(verified.call.name)) return inspectCommand(verified.command, { workdir: context.workdir, shell: verified.call.name, realTarget })
+  const lexical = [verified.args.file_path, resolve(context.workspacePath, verified.args.file_path)]
+  const targets = realTarget === undefined ? lexical : [...lexical, realTarget(lexical[1])]
+  return { handoffReason: targets.some(securityTarget) ? 'security-config' : targets.some(sensitivePath) ? 'credentials' : undefined, minimumRisk: 'medium', literalDisplay: false }
+}
+
+/**
+ * Local action guards over both the written path and its real target. Only
+ * a protected or sensitive real target behind an ordinary-looking path adds
+ * a handoff (path-redirected); undefined means the target is unverifiable.
+ */
+function linkedAction(verified, context) {
+  let action
+  try { action = pathAction(verified, context, canonicalTarget) } catch (error) {
+    if (error instanceof PathUnverified) return undefined
+    throw error
+  }
+  if (['credentials', 'security-config'].includes(action.handoffReason) && pathAction(verified, context).handoffReason !== action.handoffReason) {
+    return { ...action, handoffReason: 'path-redirected' }
+  }
+  return action
 }
 
 /** Extract the newest genuine user text, flagging overflow instead of truncating trusted context. */
@@ -730,10 +791,9 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       reportCommand = safeCommandSummary(verified)
       memory?.observe(session.id, context.scope)
       if (Object.values(verified.args).filter(value => typeof value === 'string').concat(userMessage.messages.map(message => message.text ?? '')).some(containsSecret)) return handoff('danger', 'sensitive-evidence', 'rule')
-      let action = isShellTool(verified.call.name)
-        ? inspectCommand(verified.command, { workdir: context.workdir, shell: verified.call.name })
-        : { handoffReason: securityTarget(verified.args.file_path) || securityTarget(resolve(context.workspacePath, verified.args.file_path)) ? 'security-config'
-          : sensitivePath(verified.args.file_path) || sensitivePath(resolve(context.workspacePath, verified.args.file_path)) ? 'credentials' : undefined, minimumRisk: 'medium', literalDisplay: false }
+      let action = linkedAction(verified, context)
+      if (action === undefined) return handoff('danger', 'path-unverified', 'rule')
+      const pathReason = action.handoffReason
       const compileRequest = config.pythonCompileReview && action.handoffReason === 'python-compile-environment-unverified'
         ? compileEvidenceRequest(context, req) : undefined
       if (action.handoffReason !== undefined && compileRequest === undefined) return handoff('danger', action.handoffReason, 'rule')
@@ -764,7 +824,12 @@ export function createApprovalHandler(ctx, config, patterns, lifecycle = {}) {
       const memoryKey = compileEvidence === undefined && config.sessionMemory && !config.shadowMode && memory !== undefined && context.selection !== undefined
         ? context.key : undefined
       const approve = (source, reasonCode, detail, risk, diagnostics = '') => {
-        const stale = () => cancellationDetail(req, lifetimeSignal) ?? (contextOf(req).key === context.key ? undefined : 'context-changed')
+        // Links may change while the model runs: re-resolve so a new redirection is not approved.
+        const samePathAction = () => {
+          const current = linkedAction(verified, context)
+          return current !== undefined && current.handoffReason === pathReason
+        }
+        const stale = () => cancellationDetail(req, lifetimeSignal) ?? (contextOf(req).key === context.key && samePathAction() ? undefined : 'context-changed')
           ?? (compileEvidence !== undefined && (ctx.get(COMPILE_EVIDENCE_SERVICE) !== compileProvider || !compileEvidence.isCurrent()) ? 'compile-evidence-stale' : undefined)
         const before = stale()
         if (before !== undefined) { memory?.clear(session.id); return handoff('missing-evidence', before) }

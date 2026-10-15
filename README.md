@@ -239,7 +239,7 @@ P3 默认关闭：只有宿主提供 `autoApproveExecutionEvidence` 执行证据
 
 `/auto-report` 显示 `unsupported-tool`、`unsupported-syntax`、`python-compile-environment-unverified`、`compile-evidence-unavailable/invalid/cancelled/stale` 等具体分支。`call-sha256` 是原始 callId 经 `JSON.stringify` 后计算 SHA-256 的前 16 位，便于本地关联而不输出原始命令/理由。截图原命令现在可以识别成功提示尾句，但缺少隔离参数和可信执行证据，仍转人工。
 
-Windows 路径检查覆盖已识别的敏感/配置目录与部分特殊路径；词法检查本身不证明 junction/symlink 落点。真实路径证明必须由宿主提供并约束实际执行。代理声称的 `sandbox permission issue / grantwrite` 不是已验证的 ACL 故障，插件不会修改宿主 ACL。原生 Windows、实际 DSH、真实模型和灰度结果分开记录在[验收记录](./docs/ACCEPTANCE.md)。
+Windows 路径检查覆盖已识别的敏感/配置目录与部分特殊路径。审批时插件还会在宿主本机解析 symlink、junction 等重定向，已有路径规则同样作用于真实落点：指向敏感或受保护位置的链接转人工（`path-redirected`），悬空或无法解析的链接转人工（`path-unverified`），普通路径和非受保护链接行为不变。这只是审批时证据，不能消除审批到执行之间的替换竞态（TOCTOU），也看不到远程执行器的文件系统；完整防护仍需宿主在实际执行时强制核验落点（HOST_FIX_REQUIRED）。代理声称的 `sandbox permission issue / grantwrite` 不是已验证的 ACL 故障，插件不会修改宿主 ACL。原生 Windows、实际 DSH、真实模型和灰度结果分开记录在[验收记录](./docs/ACCEPTANCE.md)。
 
 插件决策日志只记录固定原因码和来源，例如 `decision=auto-approve verdict=approve reasonCode=routine decisionSource=model`，不摘录命令、参数或 justification。权威审计台账仍由 dsh 内置、成对出现的 `approval/asked` 与 `approval/decided` 会话事件承担。
 
