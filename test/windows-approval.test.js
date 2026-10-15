@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,7 +19,7 @@ function request(command = 'git status', tool = 'pwsh') {
     ] } } }
 }
 
-function runner({ shadowMode = false, verdict = 'approve', onStream } = {}) {
+function runner({ shadowMode = false, verdict = 'approve', onStream, stream, timeoutMs } = {}) {
   let calls = 0
   const rows = []
   const logs = []
@@ -27,7 +28,7 @@ function runner({ shadowMode = false, verdict = 'approve', onStream } = {}) {
     get(name) {
       if (name === 'permissionPresets') return { current: () => 'sandboxed-auto' }
       if (name === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'fixture', model: 'fixture' }) }
-      if (name === 'llm') return { async *stream(options) {
+      if (name === 'llm') return stream !== undefined ? { stream: (...args) => { calls++; return stream(...args) } } : { async *stream(options) {
         calls++
         evidence.push(JSON.parse(options.messages[0].content[0].text))
         onStream?.()
@@ -38,7 +39,7 @@ function runner({ shadowMode = false, verdict = 'approve', onStream } = {}) {
     },
     logger: { info(message) { logs.push(message) } },
   }
-  const handle = createApprovalHandler(ctx, Config({ shadowMode }), [], { recordDecision: row => rows.push(row) })
+  const handle = createApprovalHandler(ctx, Config({ shadowMode, ...(timeoutMs === undefined ? {} : { timeoutMs }) }), [], { recordDecision: row => rows.push(row) })
   return { rows, logs, evidence, get calls() { return calls }, run: req => handle(req, () => 'manual') }
 }
 
@@ -118,6 +119,10 @@ test('pwsh honors model ask, shadow mode, cancellation and evidence changes', as
 
 const staticCommands = [
   [String.raw`python -m py_compile "D:\AI\票据 审核\InvoiceTool.py"`, ['python', '-m', 'py_compile', String.raw`D:\AI\票据 审核\InvoiceTool.py`]],
+  [String.raw`git -C 'D:\项目 目录\仓库' status`, ['git', '-C', String.raw`D:\项目 目录\仓库`, 'status']],
+  // Single quotes are verbatim in PowerShell: no subexpression runs.
+  ["git log '--format=$(whoami)'", ['git', 'log', '--format=$(whoami)']],
+  ['git\tstatus', ['git', 'status']],
   [String.raw`git -C 'D:\project files' status`, ['git', '-C', String.raw`D:\project files`, 'status']],
   ['git status', ['git', 'status']],
   ['git diff "literal;name"', ['git', 'diff', 'literal;name']],
@@ -180,6 +185,14 @@ test('static PowerShell tokenizer preserves literal Windows paths and rejects ex
     'git "`n"', 'git --% status', '& git status', 'git @args', 'git st*', 'git status # comment',
     "git 'a''b'", "git 'a'b", 'git "a"b', "'git' status", 'git status\nwhoami', 'git status\0',
     'git “push” origin main --force', 'git "" push origin main --force',
+    // Variable expansion, subexpressions, grouping, script blocks and escapes.
+    'git ${env:PATH}', 'git "$env:USERPROFILE"', 'git $(whoami)', 'git (whoami)', 'git @(1)', 'git log --format=$(whoami)',
+    '& { git status }', '[void](git status)', 'git status`', 'git "a`"b"',
+    // Redirection, pipelines and pipeline-chain operators.
+    'git status 2>&1', 'git status 3>&1', 'git status *> out.txt', 'git status >> log', 'git status <in.txt',
+    'git status | Out-Null', 'git status && git log', 'git status || whoami', 'git status -- ;',
+    // CRLF and a bare CR are statement separators in a script, never literal text.
+    'git status\r\nwhoami', 'git status\r',
   ]) assert.equal(powershellCommandWords(command), undefined, command)
   assert.equal(inspectCommand('echo safe', { shell: 'bash' }).handoffReason, undefined)
   assert.equal(inspectCommand('echo safe', { shell: 'pwsh' }).handoffReason, 'unsupported-command')
@@ -194,6 +207,43 @@ test('Windows path guards work on every test host, including normalization and c
     assert.equal(unverifiedWindowsPath(path), false)
   }
   for (const path of [String.raw`\\?\C:\project`, String.raw`\\server\share`, 'C:relative', String.raw`C:\file:stream`]) assert.equal(unverifiedWindowsPath(path), true, path)
+})
+
+test('pwsh sensitive, protected and unverified paths are case-insensitive and stay manual', () => {
+  for (const [command, reason] of [
+    [String.raw`git diff 'C:\USERS\A\.SSH\ID_RSA'`, 'credentials'],
+    [String.raw`git diff 'C:\Users\A\.Aws\Credentials'`, 'credentials'],
+    [String.raw`git diff 'D:\proj\.Env.Local'`, 'credentials'],
+    [String.raw`git -C 'C:\Users\A\.DSH' status`, 'security-config'],
+    [String.raw`git -C 'C:\Users\A\AppData\Roaming\DSH' status`, 'security-config'],
+    [String.raw`git -C 'c:\windows\system32' status`, 'security-config'],
+    [String.raw`git -C 'C:\PROGRAMDATA\x' status`, 'security-config'],
+    [String.raw`git -C '\\?\UNC\server\share' status`, 'path-unverified'],
+    ["git -C '//server/share' status", 'path-unverified'],
+    [String.raw`git -C '\\.\pipe\x' status`, 'path-unverified'],
+    ["git -C 'D:file' status", 'path-unverified'],
+    [String.raw`git diff 'C:\x\a.txt::$DATA'`, 'path-unverified'],
+    [String.raw`git diff 'C:\x\a.txt:hidden:$DATA'`, 'path-unverified'],
+  ]) assert.equal(inspectCommand(command, { shell: 'pwsh' }).handoffReason, reason, command)
+})
+
+test('pwsh model failures, malformed replies and timeouts hand off after one attempt', async () => {
+  const reply = text => async function* () {
+    yield { type: 'block-start', index: 0, blockType: 'text' }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+  for (const stream of [
+    async function* () { throw new Error('model unavailable') },
+    reply('not json'),
+    reply('{"risk":"low","verdict":"approve","reasonCode":"routine","extra":1}'),
+    async function* () { yield { type: 'finish', reason: { kind: 'length' } } },
+    async function* (options) { await new Promise((_, rejectWait) => options.signal?.addEventListener('abort', () => rejectWait(options.signal.reason))) },
+  ]) {
+    const app = runner({ stream, timeoutMs: 50 })
+    assert.equal(await app.run(request()), 'manual')
+    assert.equal(app.calls, 1)
+  }
 })
 
 test('Windows-sensitive file writes are guarded before model approval on every host', async () => {
@@ -261,5 +311,36 @@ test('host root checks reject temp children and treat different Windows drives a
   if (process.platform === 'win32') {
     assert.equal(within('D:\\a\\_temp\\host', 'C:\\Users\\runner\\Temp'), false)
     assert.equal(within('C:\\Users\\runner\\Temp\\host', 'C:\\Users\\runner\\Temp'), true)
+  }
+})
+
+test('NTFS facts behind the manual path rules: case-folded names, ADS and junctions (native)', { skip: process.platform !== 'win32' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'approval-ntfs-'))
+  try {
+    // Case-insensitive lookup: `.ENV` and `.env` are one file, and both spellings are sensitive.
+    writeFileSync(join(dir, '.ENV'), 'TOKEN=fixture')
+    assert.equal(existsSync(join(dir, '.env')), true)
+    assert.equal(sensitivePath(join(dir, '.ENV')), true)
+    assert.equal(sensitivePath(join(dir, '.env')), true)
+    // An alternate data stream is real hidden storage on the same file name, so it stays path-unverified.
+    writeFileSync(join(dir, 'a.txt'), 'visible')
+    writeFileSync(join(dir, 'a.txt:hidden'), 'stream')
+    assert.equal(readFileSync(join(dir, 'a.txt:hidden'), 'utf8'), 'stream')
+    assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'visible')
+    assert.deepEqual((await readdir(dir)).filter(name => name.startsWith('a.txt')), ['a.txt'])
+    assert.equal(unverifiedWindowsPath(join(dir, 'a.txt:hidden')), true)
+    // Junctions need no privilege. Classification is lexical by design, so a junction
+    // into a protected directory is NOT detected; only the native approval protects it.
+    const protectedDir = join(dir, '.dsh')
+    mkdirSync(protectedDir)
+    const link = join(dir, 'innocent')
+    symlinkSync(protectedDir, link, 'junction')
+    assert.equal(lstatSync(link).isSymbolicLink(), true)
+    assert.equal(realpathSync(link), realpathSync(protectedDir))
+    assert.equal(securityTarget(join(realpathSync(link), 'repo')), true)
+    assert.equal(securityTarget(join(link, 'repo')), false)
+    assert.equal(inspectCommand(`git init '${join(link, 'repo')}'`, { shell: 'pwsh' }).handoffReason, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
   }
 })
