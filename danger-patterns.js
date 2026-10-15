@@ -110,7 +110,8 @@ export function commandWords(command, shell = 'bash') {
 }
 
 // Use Windows semantics for visibly Windows paths even during offline Linux
-// replay. This is lexical classification, never a realpath/junction guarantee.
+// replay. This is lexical classification; inspectCommand's optional realTarget
+// adds the host's link-resolved view at approval time, never an execution guarantee.
 function policyPath(path) {
   const windows = process.platform === 'win32' || /^[a-z]:|\\/i.test(path)
   const target = (windows ? win32.normalize(path) : normalize(path)).replaceAll('\\', '/')
@@ -180,8 +181,13 @@ function result(handoffReason, minimumRisk = 'low', literalDisplay = false) {
 
 /** Non-overridable action guards. Configurable regexes are an additional layer.
  * This function never executes or predicts arbitrary code. */
-export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) {
+export function inspectCommand(command, { workdir = '/', shell = 'bash', realTarget } = {}) {
   const words = shell === 'pwsh' ? powershellCommandPlan(command)?.words : commandWords(command, shell)
+  // Optional host view of where a path really lands (links resolved). Each
+  // existing path rule also checks it, so a link cannot launder a protected
+  // target; ordinary paths and non-protected links keep the lexical outcome.
+  // It is evidence at approval time only, never a guarantee at execution.
+  const real = path => realTarget === undefined ? [] : [realTarget(resolve(workdir, path))]
   if (words === undefined) return result('unsupported-syntax')
   let args = words.slice(1)
   let executable = words[0].split('/').at(-1)
@@ -192,8 +198,8 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     if (/[\\/:]/.test(words[0])) return result('execution-environment-unverified')
     executable = words[0].toLowerCase().replace(/\.exe$/, '')
     if (!/^(?:git|python\d*(?:\.\d+)?|node|pwsh|powershell)$/.test(executable)) return result('unsupported-command')
-    if (args.some(sensitivePath)) return result('credentials')
-    if (args.some(securityTarget)) return result('security-config')
+    if (args.some(arg => sensitivePath(arg) || real(arg).some(sensitivePath))) return result('credentials')
+    if (args.some(arg => securityTarget(arg) || real(arg).some(securityTarget))) return result('security-config')
     // Namespace paths, UNC, ADS and drive-relative paths are not proven local.
     if (args.some(unverifiedWindowsPath)) return result('path-unverified')
   }
@@ -252,10 +258,10 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
       }
     }
   }
-  if (outputs.some(path => securityTarget(resolve(workdir, path)) || securityTarget(path))) return result('security-config')
+  if (outputs.some(path => securityTarget(resolve(workdir, path)) || securityTarget(path) || real(path).some(securityTarget))) return result('security-config')
   // Extraction into the working tree silently overwrites existing files.
   if (extractsArchive || (executable === 'unzip' && outputs.length > 0)) return result(undefined, 'medium')
-  if (['cat', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'ls', 'find', 'stat', 'file', 'strings', 'xxd', 'od', 'base64', 'diff', 'tar', 'zip', 'cp', 'scp', 'rsync'].includes(executable) && args.some(arg => sensitivePath(arg) || sensitivePath(resolve(workdir, arg)))) return result('credentials')
+  if (['cat', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'ls', 'find', 'stat', 'file', 'strings', 'xxd', 'od', 'base64', 'diff', 'tar', 'zip', 'cp', 'scp', 'rsync'].includes(executable) && args.some(arg => sensitivePath(arg) || sensitivePath(resolve(workdir, arg)) || real(arg).some(sensitivePath))) return result('credentials')
   if (executable === 'rm') {
     const targets = args.filter(arg => !arg.startsWith('-'))
     if (targets.length === 0 || targets.some(arg => /^(?:\/|~|\.\.(?:\/|$))/.test(arg))) return result('destructive')
@@ -274,7 +280,8 @@ export function inspectCommand(command, { workdir = '/', shell = 'bash' } = {}) 
     }
     if (args[0]?.startsWith('-')) return result('uncertain')
     if (['clone', 'checkout', 'switch', 'reset', 'clean', 'pull'].includes(args[0])
-      && (securityTarget(workdir) || (args[0] === 'clone' && securityTarget(resolve(workdir, args.at(-1)))))) return result('security-config')
+      && (securityTarget(workdir) || real(workdir).some(securityTarget)
+        || (args[0] === 'clone' && [resolve(workdir, args.at(-1)), ...real(args.at(-1))].some(securityTarget)))) return result('security-config')
     if (args[0] === 'reset') {
       // Git accepts unambiguous long-option abbreviations. Other reset modes
       // still change index/ref state and cannot rely on a low-risk reply.
