@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Config, canonicalTarget, createApprovalHandler } from '../index.js'
 import { inspectCommand } from '../danger-patterns.js'
 
@@ -12,7 +12,8 @@ import { inspectCommand } from '../danger-patterns.js'
 const linkDir = (target, path) => symlinkSync(target, path, process.platform === 'win32' ? 'junction' : 'dir')
 
 function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'approval-links-')))
+  // Native realpath, like canonicalTarget: it also expands Windows 8.3 names (RUNNER~1).
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'approval-links-')))
   const workspace = join(root, 'workspace')
   const protectedDir = join(root, 'profile', '.dsh')
   const ordinary = join(root, 'docs')
@@ -59,8 +60,8 @@ test('canonicalTarget resolves existing links, keeps missing tails and rejects d
   try {
     assert.equal(canonicalTarget(join(f.workspace, 'a.txt')), join(f.workspace, 'a.txt'))
     assert.equal(canonicalTarget(join(f.workspace, 'plain', 'new', 'file.txt')), join(f.workspace, 'plain', 'new', 'file.txt'))
-    assert.equal(canonicalTarget(join(f.workspace, 'innocent', 'config.yml')), join(realpathSync(f.protectedDir), 'config.yml'))
-    assert.equal(canonicalTarget(join(f.workspace, 'docs-link', 'x', 'y')), join(realpathSync(f.ordinary), 'x', 'y'))
+    assert.equal(canonicalTarget(join(f.workspace, 'innocent', 'config.yml')), join(realpathSync.native(f.protectedDir), 'config.yml'))
+    assert.equal(canonicalTarget(join(f.workspace, 'docs-link', 'x', 'y')), join(realpathSync.native(f.ordinary), 'x', 'y'))
     assert.throws(() => canonicalTarget(join(f.workspace, 'dangling')))
     assert.throws(() => canonicalTarget(join(f.workspace, 'dangling', 'child.txt')))
   } finally {
@@ -69,7 +70,8 @@ test('canonicalTarget resolves existing links, keeps missing tails and rejects d
 })
 
 test('existing path rules also apply to the real target, and only there', () => {
-  const map = new Map([['/w/out', '/home/u/.dsh/out'], ['/w/notes', '/home/u/.ssh/id_rsa'], ['/w/link', '/home/u/.dsh']])
+  // Keys use this platform's resolve(), as inspectCommand does (D:\w\out on Windows).
+  const map = new Map([['/w/out', '/home/u/.dsh/out'], ['/w/notes', '/home/u/.ssh/id_rsa'], ['/w/link', '/home/u/.dsh']].map(([key, value]) => [resolve(key), value]))
   const realTarget = path => map.get(path) ?? path
   const at = (command, shell = 'bash') => inspectCommand(command, { workdir: '/w', shell, realTarget }).handoffReason
   assert.equal(at('cp a.txt out'), 'security-config')
